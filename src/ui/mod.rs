@@ -13,9 +13,6 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     Terminal,
-    widgets::{Block, Borders, Paragraph},
-    text::{Line, Span},
-    style::{Color, Style, Modifier},
 };
 
 use crate::managers::config::ConfigManager;
