@@ -2,6 +2,7 @@ use clap::Parser;
 use std::process::ExitCode;
 
 pub mod error;
+pub mod core;
 pub mod managers;
 pub mod ui;
 
