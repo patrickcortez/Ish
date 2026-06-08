@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 pub mod error;
 pub mod managers;
+pub mod ui;
 
 #[derive(Parser, Debug)]
 #[command(name = "ish")]
@@ -42,7 +43,11 @@ fn main() -> ExitCode {
 
     // Launch TUI (Phase 2)
     println!("Launching Ish TUI...");
-    // TODO: Init Ratatui and event loop
+    let mut app = ui::App::new();
+    if let Err(e) = app.run(&config_manager) {
+        eprintln!("Error running TUI: {}", e);
+        return ExitCode::FAILURE;
+    }
 
     ExitCode::SUCCESS
 }
