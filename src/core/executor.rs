@@ -103,6 +103,62 @@ impl Executor {
                 if nodes.is_empty() {
                     return Ok((true, String::new()));
                 }
+
+                if cfg!(target_os = "windows") {
+                    let mut all_commands = true;
+                    for node in nodes {
+                        if !matches!(node, AstNode::Command { .. }) {
+                            all_commands = false;
+                            break;
+                        }
+                    }
+
+                    if all_commands {
+                        let mut full_ps_cmd = String::new();
+                        for (i, node) in nodes.iter().enumerate() {
+                            if let AstNode::Command { program, args, .. } = node {
+                                full_ps_cmd.push_str(program);
+                                for arg in args {
+                                    full_ps_cmd.push(' ');
+                                    full_ps_cmd.push_str(arg);
+                                }
+                                if i < nodes.len() - 1 {
+                                    full_ps_cmd.push_str(" | ");
+                                }
+                            }
+                        }
+
+                        let mut c = Command::new("powershell");
+                        c.arg("-NoProfile").arg("-Command").arg(full_ps_cmd);
+                        c.stdout(Stdio::piped());
+                        c.stderr(Stdio::piped());
+
+                        if !input.is_empty() {
+                            c.stdin(Stdio::piped());
+                        } else {
+                            c.stdin(Stdio::inherit());
+                        }
+
+                        let mut child = c.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+
+                        if !input.is_empty() {
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let _ = stdin.write_all(input.as_bytes());
+                            }
+                        }
+
+                        let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                        let mut output = String::new();
+                        if let Some(mut stdout) = child.stdout.take() {
+                            let _ = stdout.read_to_string(&mut output);
+                        }
+                        if let Some(mut stderr) = child.stderr.take() {
+                            let _ = stderr.read_to_string(&mut output);
+                        }
+
+                        return Ok((status.success(), output));
+                    }
+                }
                 
                 let mut current_input = input.to_string();
                 let mut last_success = true;
