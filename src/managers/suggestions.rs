@@ -42,6 +42,24 @@ impl SuggestionManager {
                     }
                 }
             }
+
+            if cfg!(target_os = "windows") {
+                if let Ok(output) = std::process::Command::new("powershell")
+                    .arg("-NoProfile")
+                    .arg("-Command")
+                    .arg("Get-Command -CommandType Cmdlet,Alias,Function | Select-Object -ExpandProperty Name")
+                    .output()
+                {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    for line in stdout.lines() {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            execs.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+
             execs.sort();
             execs.dedup();
             if let Ok(mut locked) = executables_clone.lock() {
@@ -78,9 +96,6 @@ impl SuggestionManager {
             if h.starts_with(trimmed) && !results.contains(h) {
                 results.push(h.clone());
             }
-            if results.len() >= 5 {
-                break;
-            }
         }
 
         // 3. Suggest from PATH executables
@@ -88,9 +103,6 @@ impl SuggestionManager {
             for exec in execs.iter() {
                 if exec.starts_with(trimmed) && !results.contains(exec) {
                     results.push(exec.clone());
-                }
-                if results.len() >= 10 {
-                    break;
                 }
             }
         }
@@ -131,9 +143,6 @@ impl SuggestionManager {
                         }
                         results.push(sugg_str);
                     }
-                }
-                if results.len() >= 10 {
-                    break;
                 }
             }
         }

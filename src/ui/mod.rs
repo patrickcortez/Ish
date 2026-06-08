@@ -109,6 +109,10 @@ impl App {
                             new_input.push_str(&accepted);
                             self.input.set_input(new_input);
                         }
+                    } else if key.code == KeyCode::PageUp {
+                        self.output.scroll_up();
+                    } else if key.code == KeyCode::PageDown {
+                        self.output.scroll_down();
                     } else if key.code == KeyCode::Up {
                         if let Some(cmd) = self.history.get_previous() {
                             self.input.set_input(cmd);
