@@ -89,7 +89,17 @@ impl App {
                     }
 
                     // Delegate events
+                    let mut is_suggestion_nav = false;
                     if self.suggestions.is_active() {
+                        match key.code {
+                            KeyCode::Down | KeyCode::Up | KeyCode::Right | KeyCode::Tab | KeyCode::Esc => {
+                                is_suggestion_nav = true;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if is_suggestion_nav {
                         if let Some(accepted) = self.suggestions.handle_key(key) {
                             let mut tokens: Vec<&str> = self.input.input.split_whitespace().collect();
                             if !self.input.input.ends_with(char::is_whitespace) && !tokens.is_empty() {
