@@ -18,6 +18,22 @@ struct Args {
     script: Option<String>,
 }
 
+fn execute_headless_command(cmd: &str) -> Result<(), error::IshError> {
+    let mut tokenizer = core::tokenizer::Tokenizer::new(cmd);
+    let tokens = tokenizer.tokenize()?;
+    let mut parser = core::parser::Parser::new(tokens);
+    let ast = parser.parse()?;
+    let linter = core::linter::Linter::new();
+    linter.lint(&ast)?;
+    let mut jobs = managers::job_controller::JobController::new();
+    let mut executor = core::executor::Executor::new();
+    let (_, out) = executor.execute(&ast, &mut jobs)?;
+    if !out.is_empty() {
+        print!("{}", out);
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
 
@@ -31,14 +47,29 @@ fn main() -> ExitCode {
     };
 
     if let Some(cmd) = args.command {
-        // Headless mode: run a single command
-        println!("Headless mode (command): {}", cmd);
-        // TODO: Pass to the executor
+        if let Err(e) = execute_headless_command(&cmd) {
+            eprintln!("Command execution failed: {}", e);
+            return ExitCode::FAILURE;
+        }
         return ExitCode::SUCCESS;
     } else if let Some(script_path) = args.script {
-        // Headless mode: run a script
-        println!("Headless mode (script): {}", script_path);
-        // TODO: Read script and pass to the parser/executor
+        match std::fs::read_to_string(&script_path) {
+            Ok(content) => {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                        if let Err(e) = execute_headless_command(trimmed) {
+                            eprintln!("Script execution failed on line '{}': {}", trimmed, e);
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read script file: {}", e);
+                return ExitCode::FAILURE;
+            }
+        }
         return ExitCode::SUCCESS;
     }
 

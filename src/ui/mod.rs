@@ -116,7 +116,31 @@ impl App {
                                 self.history.add(cmd.clone());
                                 self.output.append(format!("> {}", cmd));
 
-                                if cmd.trim() == "jobs" {
+                                let cmd_trim = cmd.trim();
+                                
+                                if cmd_trim == "exit" || cmd_trim == "quit" {
+                                    self.should_quit = true;
+                                    break;
+                                } else if cmd_trim.starts_with("cd ") {
+                                    let path = cmd_trim[3..].trim();
+                                    if let Err(e) = std::env::set_current_dir(path) {
+                                        self.output.append(format!("cd error: {}", e));
+                                    }
+                                    continue;
+                                } else if cmd_trim.starts_with(":Color ") {
+                                    let color = cmd_trim[7..].trim();
+                                    self.output.append(format!("Color configuration is a WIP: {}", color));
+                                    continue;
+                                } else if cmd_trim == ":Toggle" {
+                                    self.config.current_config.autocd = !self.config.current_config.autocd;
+                                    self.output.append(format!("Autocd set to: {}", self.config.current_config.autocd));
+                                    continue;
+                                } else if cmd_trim.starts_with(":Editor ") {
+                                    let editor = cmd_trim[8..].trim();
+                                    self.config.current_config.editor = editor.to_string();
+                                    self.output.append(format!("Editor set to: {}", editor));
+                                    continue;
+                                } else if cmd_trim == "jobs" {
                                     let out = self.jobs.list_jobs();
                                     self.output.append(out);
                                     continue;
