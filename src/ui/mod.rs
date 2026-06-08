@@ -21,6 +21,7 @@ use ratatui::{
 use crate::managers::config::ConfigManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::job_controller::JobController;
+use crate::managers::suggestions::SuggestionManager;
 use crate::core::tokenizer::Tokenizer;
 use crate::core::parser::Parser;
 use crate::core::linter::Linter;
@@ -35,6 +36,7 @@ pub struct App {
     pub config: ConfigManager,
     pub history: HistoryManager,
     pub jobs: JobController,
+    pub sugg_engine: SuggestionManager,
 }
 
 impl App {
@@ -48,6 +50,7 @@ impl App {
             config: ConfigManager::new().unwrap(),
             history: HistoryManager::new(),
             jobs: JobController::new(),
+            sugg_engine: SuggestionManager::new(),
         }
     }
 
@@ -87,7 +90,18 @@ impl App {
 
                     // Delegate events
                     if self.suggestions.is_active() {
-                        self.suggestions.handle_key(key);
+                        if let Some(accepted) = self.suggestions.handle_key(key) {
+                            let mut tokens: Vec<&str> = self.input.input.split_whitespace().collect();
+                            if !self.input.input.ends_with(char::is_whitespace) && !tokens.is_empty() {
+                                tokens.pop();
+                            }
+                            let mut new_input = tokens.join(" ");
+                            if !new_input.is_empty() {
+                                new_input.push(' ');
+                            }
+                            new_input.push_str(&accepted);
+                            self.input.set_input(new_input);
+                        }
                     } else if key.code == KeyCode::Up {
                         if let Some(cmd) = self.history.get_previous() {
                             self.input.set_input(cmd);
@@ -158,6 +172,12 @@ impl App {
                                     }
                                     Err(e) => self.output.append(format!("Tokenize Error: {}", e)),
                                 }
+                            }
+                        } else {
+                            // Update suggestions dynamically as typing occurs
+                            if matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace) {
+                                let suggs = self.sugg_engine.get_suggestions(&self.input.input, self.history.get_all());
+                                self.suggestions.set_suggestions(suggs);
                             }
                         }
                     }

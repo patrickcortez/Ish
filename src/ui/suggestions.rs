@@ -24,19 +24,33 @@ impl SuggestionsBox {
         self.is_active && !self.suggestions.is_empty()
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) {
+    pub fn set_suggestions(&mut self, suggs: Vec<String>) {
+        self.suggestions = suggs;
+        self.is_active = !self.suggestions.is_empty();
+        if self.is_active {
+            self.state.select(Some(0));
+        } else {
+            self.state.select(None);
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
             KeyCode::Down => self.next(),
             KeyCode::Up => self.previous(),
-            KeyCode::Right => {
-                // Accept suggestion
-                self.is_active = false;
+            KeyCode::Right | KeyCode::Tab => {
+                if let Some(i) = self.state.selected() {
+                    let val = self.suggestions[i].clone();
+                    self.is_active = false;
+                    return Some(val);
+                }
             }
             KeyCode::Esc => {
                 self.is_active = false;
             }
             _ => {}
         }
+        None
     }
 
     fn next(&mut self) {

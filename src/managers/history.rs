@@ -86,4 +86,8 @@ impl HistoryManager {
             Some(String::new())
         }
     }
+
+    pub fn get_all(&self) -> &[String] {
+        &self.history
+    }
 }
