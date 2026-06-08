@@ -19,6 +19,8 @@ use ratatui::{
 };
 
 use crate::managers::config::ConfigManager;
+use crate::managers::history::HistoryManager;
+use crate::managers::job_controller::JobController;
 use crate::core::tokenizer::Tokenizer;
 use crate::core::parser::Parser;
 use crate::core::linter::Linter;
@@ -30,6 +32,9 @@ pub struct App {
     pub output: output::OutputBox,
     pub banner: banner::BannerBox,
     pub suggestions: suggestions::SuggestionsBox,
+    pub config: ConfigManager,
+    pub history: HistoryManager,
+    pub jobs: JobController,
 }
 
 impl App {
@@ -40,6 +45,9 @@ impl App {
             output: output::OutputBox::new(),
             banner: banner::BannerBox::new(),
             suggestions: suggestions::SuggestionsBox::new(),
+            config: ConfigManager::new().unwrap(),
+            history: HistoryManager::new(),
+            jobs: JobController::new(),
         }
     }
 
@@ -80,10 +88,45 @@ impl App {
                     // Delegate events
                     if self.suggestions.is_active() {
                         self.suggestions.handle_key(key);
+                    } else if key.code == KeyCode::Up {
+                        if let Some(cmd) = self.history.get_previous() {
+                            self.input.set_input(cmd);
+                        }
+                    } else if key.code == KeyCode::Down {
+                        if let Some(cmd) = self.history.get_next() {
+                            self.input.set_input(cmd);
+                        }
                     } else {
                         if let Some(cmd) = self.input.handle_key(key) {
                             if !cmd.trim().is_empty() {
+                                self.history.add(cmd.clone());
                                 self.output.append(format!("> {}", cmd));
+
+                                if cmd.trim() == "jobs" {
+                                    let out = self.jobs.list_jobs();
+                                    self.output.append(out);
+                                    continue;
+                                } else if cmd.starts_with("kill ") {
+                                    if let Ok(id) = cmd[5..].trim().parse::<u32>() {
+                                        match self.jobs.kill_job(id) {
+                                            Ok(msg) => self.output.append(msg),
+                                            Err(e) => self.output.append(e),
+                                        }
+                                    } else {
+                                        self.output.append("Usage: kill <job_id>".to_string());
+                                    }
+                                    continue;
+                                } else if cmd.starts_with("fg ") {
+                                    if let Ok(id) = cmd[3..].trim().parse::<u32>() {
+                                        match self.jobs.wait_job(id) {
+                                            Ok(msg) => self.output.append(msg),
+                                            Err(e) => self.output.append(e),
+                                        }
+                                    } else {
+                                        self.output.append("Usage: fg <job_id>".to_string());
+                                    }
+                                    continue;
+                                }
                                 
                                 let mut tokenizer = Tokenizer::new(&cmd);
                                 match tokenizer.tokenize() {
@@ -96,7 +139,7 @@ impl App {
                                                     self.output.append(format!("Lint Error: {}", e));
                                                 } else {
                                                     let mut executor = Executor::new();
-                                                    match executor.execute(&ast) {
+                                                    match executor.execute(&ast, &mut self.jobs) {
                                                         Ok((_, out)) => {
                                                             if !out.trim().is_empty() {
                                                                 for line in out.lines() {

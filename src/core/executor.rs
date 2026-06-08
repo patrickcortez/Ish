@@ -3,6 +3,7 @@ use crate::error::IshError;
 use std::process::{Command, Stdio};
 use std::fs::File;
 use std::io::{Read, Write};
+use crate::managers::job_controller::JobController;
 
 pub struct Executor {}
 
@@ -11,11 +12,11 @@ impl Executor {
         Self {}
     }
 
-    pub fn execute(&mut self, ast: &AstNode) -> Result<(bool, String), IshError> {
-        self.execute_node_with_input(ast, "")
+    pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<(bool, String), IshError> {
+        self.execute_node_with_input(ast, "", jobs)
     }
 
-    fn execute_node_with_input(&mut self, node: &AstNode, input: &str) -> Result<(bool, String), IshError> {
+    fn execute_node_with_input(&mut self, node: &AstNode, input: &str, jobs: &mut JobController) -> Result<(bool, String), IshError> {
         match node {
             AstNode::Command { program, args, redirect_to, redirect_from } => {
                 let mut cmd = if cfg!(target_os = "windows") {
@@ -73,15 +74,15 @@ impl Executor {
                 Ok((status.success(), output))
             }
             AstNode::Sequential(left, right) => {
-                let (_s1, mut out1) = self.execute_node_with_input(left, input)?;
-                let (s2, out2) = self.execute_node_with_input(right, "")?;
+                let (_s1, mut out1) = self.execute_node_with_input(left, input, jobs)?;
+                let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
                 out1.push_str(&out2);
                 Ok((s2, out1))
             }
             AstNode::AndThen(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input)?;
+                let (success, mut out) = self.execute_node_with_input(left, input, jobs)?;
                 if success {
-                    let (s2, out2) = self.execute_node_with_input(right, "")?;
+                    let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
                     out.push_str(&out2);
                     Ok((s2, out))
                 } else {
@@ -89,9 +90,9 @@ impl Executor {
                 }
             }
             AstNode::OrElse(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input)?;
+                let (success, mut out) = self.execute_node_with_input(left, input, jobs)?;
                 if !success {
-                    let (s2, out2) = self.execute_node_with_input(right, "")?;
+                    let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
                     out.push_str(&out2);
                     Ok((s2, out))
                 } else {
@@ -107,14 +108,54 @@ impl Executor {
                 let mut last_success = true;
 
                 for node in nodes {
-                    let (success, out) = self.execute_node_with_input(node, &current_input)?;
+                    let (success, out) = self.execute_node_with_input(node, &current_input, jobs)?;
                     last_success = success;
                     current_input = out;
                 }
                 Ok((last_success, current_input))
             }
-            AstNode::Background(_inner) => {
-                Ok((true, "[Job started in background]\n".to_string()))
+            AstNode::Background(inner) => {
+                // If the inner is a command, we spawn it without waiting.
+                if let AstNode::Command { program, args, redirect_to, redirect_from } = &**inner {
+                    let mut cmd = if cfg!(target_os = "windows") {
+                        let mut c = Command::new("powershell");
+                        c.arg("-NoProfile").arg("-Command");
+                        
+                        let mut full_cmd = program.clone();
+                        for arg in args {
+                            full_cmd.push(' ');
+                            full_cmd.push_str(arg);
+                        }
+                        c.arg(full_cmd);
+                        c
+                    } else {
+                        let mut c = Command::new(program);
+                        c.args(args);
+                        c
+                    };
+
+                    cmd.stdout(Stdio::piped());
+                    cmd.stderr(Stdio::piped());
+
+                    if let Some(path) = redirect_to {
+                        let file = File::create(path)?;
+                        cmd.stdout(Stdio::from(file));
+                    }
+                    if let Some(path) = redirect_from {
+                        let file = File::open(path)?;
+                        cmd.stdin(Stdio::from(file));
+                    }
+
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            let job_id = jobs.add_job(child);
+                            Ok((true, format!("[Job started in background] ID: {}\n", job_id)))
+                        }
+                        Err(e) => Err(IshError::ExecutionError(e.to_string())),
+                    }
+                } else {
+                    Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
+                }
             }
             _ => Ok((true, String::new())),
         }

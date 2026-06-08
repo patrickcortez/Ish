@@ -16,6 +16,14 @@ impl InputBox {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.input.clear();
+    }
+
+    pub fn set_input(&mut self, text: String) {
+        self.input = text;
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
             KeyCode::Char(c) => {
