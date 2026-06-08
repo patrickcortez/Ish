@@ -16,19 +16,22 @@ impl InputBox {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) {
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         match key.code {
             KeyCode::Char(c) => {
                 self.input.push(c);
+                None
             }
             KeyCode::Backspace => {
                 self.input.pop();
+                None
             }
             KeyCode::Enter => {
-                // To be processed by the executor
+                let val = self.input.clone();
                 self.input.clear();
+                Some(val)
             }
-            _ => {}
+            _ => None
         }
     }
 

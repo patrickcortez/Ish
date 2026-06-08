@@ -19,6 +19,10 @@ use ratatui::{
 };
 
 use crate::managers::config::ConfigManager;
+use crate::core::tokenizer::Tokenizer;
+use crate::core::parser::Parser;
+use crate::core::linter::Linter;
+use crate::core::executor::Executor;
 
 pub struct App {
     pub should_quit: bool,
@@ -77,7 +81,42 @@ impl App {
                     if self.suggestions.is_active() {
                         self.suggestions.handle_key(key);
                     } else {
-                        self.input.handle_key(key);
+                        if let Some(cmd) = self.input.handle_key(key) {
+                            if !cmd.trim().is_empty() {
+                                self.output.append(format!("> {}", cmd));
+                                
+                                let mut tokenizer = Tokenizer::new(&cmd);
+                                match tokenizer.tokenize() {
+                                    Ok(tokens) => {
+                                        let mut parser = Parser::new(tokens);
+                                        match parser.parse() {
+                                            Ok(ast) => {
+                                                let linter = Linter::new();
+                                                if let Err(e) = linter.lint(&ast) {
+                                                    self.output.append(format!("Lint Error: {}", e));
+                                                } else {
+                                                    let mut executor = Executor::new();
+                                                    match executor.execute(&ast) {
+                                                        Ok((_, out)) => {
+                                                            if !out.trim().is_empty() {
+                                                                for line in out.lines() {
+                                                                    self.output.append(line.to_string());
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            self.output.append(format!("Execution Error: {}", e));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => self.output.append(format!("Parse Error: {}", e)),
+                                        }
+                                    }
+                                    Err(e) => self.output.append(format!("Tokenize Error: {}", e)),
+                                }
+                            }
+                        }
                     }
                 }
             }
