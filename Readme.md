@@ -119,4 +119,4 @@ After installing you can simply run: `ish`.
 
 ## License
 
-**Ish** is under *GNU GPL v3.0 License*.
+**Ish** is under *GNU GPL v3.0 License*, for more information See [LICENSE](LICENSE).
