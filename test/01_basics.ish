@@ -1,16 +1,16 @@
-iecho "--- Starting Test 01: Basics ---"
+out "--- Starting Test 01: Basics ---"
 
 user="Cortez"
 greeting="Welcome to Ish, $user!"
-iecho $greeting
+out $greeting
 
-iecho "Current directory contents:"
-ils
+out "Current directory contents:"
+show
 
-iecho "Creating a test directory..."
-imkdir test_dir
+out "Creating a test directory..."
+create -d test_dir
 
-iecho "Removing test directory..."
+out "Removing test directory..."
 irm test_dir
 
-iecho "--- Test 01 Completed ---"
+out "--- Test 01 Completed ---"

@@ -1,0 +1,4 @@
+let name = input "What is your name?"
+out "Hello, $name!"
+let key = inputkey "Press any key to exit..."
+out "You pressed: $key"

@@ -1,23 +1,23 @@
-iecho "--- Starting Test 04: Maps & Functions ---"
+out "--- Starting Test 04: Maps & Functions ---"
 
 let config = Map("version", "1.0", "author", "Cortez", "mode", "production", )
 
-iecho "Config loaded:"
-iecho "Version: $config[version]"
-iecho "Author: $config[author]"
+out "Config loaded:"
+out "Version: $config[version]"
+out "Author: $config[author]"
 
 fn validate_config() {
-    iecho "Checking configuration state..."
+    out "Checking configuration state..."
     if ( $config[mode] == "production" ) {
-        iecho "Production mode verified."
+        out "Production mode verified."
         return "SUCCESS"
     } else {
-        iecho "Development mode detected."
+        out "Development mode detected."
         return "DEV_MODE"
     }
 }
 
 let result = validate_config
-iecho "Function returned: $result"
+out "Function returned: $result"
 
-iecho "--- Test 04 Completed ---"
+out "--- Test 04 Completed ---"

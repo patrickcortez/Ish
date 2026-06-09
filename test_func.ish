@@ -1,5 +1,5 @@
 fn my_func() {
-    iecho "Hello from func"
+    out "Hello from func"
 }
 let res = my_func
-iecho "result: $res"
+out "result: $res"

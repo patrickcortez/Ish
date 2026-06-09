@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
+use std::io::Write;
 
 /// Tries to execute an internal command.
 /// Returns Ok(Some(output)) if it was an internal command and it succeeded.
@@ -9,18 +10,18 @@ use std::process;
 /// Returns Err(error_message) if it was an internal command but it failed.
 pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>, String> {
     match program {
-        "cd" => {
+        "change" => {
             let path = if args.is_empty() {
                 env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_else(|_| String::from("."))
             } else {
                 args[0].clone()
             };
             if let Err(e) = env::set_current_dir(&path) {
-                return Err(format!("cd error: {}", e));
+                return Err(format!("change error: {}", e));
             }
             Ok(Some(String::new()))
         }
-        "exit" | "quit" => {
+        "quit" => {
             let code = if !args.is_empty() {
                 args[0].parse::<i32>().unwrap_or(0)
             } else {
@@ -28,7 +29,7 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
             };
             process::exit(code);
         }
-        "export" => {
+        "declare" => {
             if args.is_empty() {
                 let mut out = String::new();
                 for (key, val) in env::vars() {
@@ -46,16 +47,16 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
             }
             Ok(Some(String::new()))
         }
-        "iecho" => {
+        "out" => {
             Ok(Some(args.join(" ") + "\n"))
         }
-        "ipwd" => {
+        "cwd" => {
             match env::current_dir() {
                 Ok(dir) => Ok(Some(format!("{}\n", dir.display()))),
-                Err(e) => Err(format!("ipwd error: {}", e)),
+                Err(e) => Err(format!("cwd error: {}", e)),
             }
         }
-        "ils" => {
+        "show" => {
             let dir = if args.is_empty() { "." } else { &args[0] };
             let mut out = String::new();
             match fs::read_dir(dir) {
@@ -70,12 +71,12 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                     }
                     Ok(Some(out))
                 }
-                Err(e) => Err(format!("ils error: {}", e)),
+                Err(e) => Err(format!("show error: {}", e)),
             }
         }
-        "icat" => {
+        "read" => {
             if args.is_empty() {
-                return Err("icat error: expected file path".to_string());
+                return Err("read error: expected file path".to_string());
             }
             let mut out = String::new();
             for file in args {
@@ -86,21 +87,77 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                             out.push('\n');
                         }
                     }
-                    Err(e) => return Err(format!("icat error on {}: {}", file, e)),
+                    Err(e) => return Err(format!("read error on {}: {}", file, e)),
                 }
             }
             Ok(Some(out))
         }
-        "imkdir" => {
+        "create" => {
             if args.is_empty() {
-                return Err("imkdir error: expected directory name".to_string());
+                return Err("create error: expected path".to_string());
             }
-            for dir in args {
-                if let Err(e) = fs::create_dir_all(dir) {
-                    return Err(format!("imkdir error on {}: {}", dir, e));
+            let mut is_dir = false;
+            let mut paths = Vec::new();
+            for arg in args {
+                if arg == "-d" {
+                    is_dir = true;
+                } else if arg == "-f" {
+                    is_dir = false;
+                } else {
+                    paths.push(arg.clone());
+                }
+            }
+            if paths.is_empty() {
+                return Err("create error: expected path after flags".to_string());
+            }
+            for path in paths {
+                if is_dir {
+                    if let Err(e) = fs::create_dir_all(&path) {
+                        return Err(format!("create dir error on {}: {}", path, e));
+                    }
+                } else {
+                    if let Err(e) = fs::File::create(&path) {
+                        return Err(format!("create file error on {}: {}", path, e));
+                    }
                 }
             }
             Ok(Some(String::new()))
+        }
+        "input" => {
+            if !args.is_empty() {
+                eprint!("{} ", args.join(" "));
+                let _ = std::io::stderr().flush();
+            }
+            let mut buf = String::new();
+            if let Err(e) = std::io::stdin().read_line(&mut buf) {
+                return Err(format!("input error: {}", e));
+            }
+            Ok(Some(buf.trim_end().to_string()))
+        }
+        "inputkey" => {
+            use crossterm::event::{read, Event, KeyCode};
+            use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
+            if !args.is_empty() {
+                eprint!("{} ", args.join(" "));
+                let _ = std::io::stderr().flush();
+            }
+            let _ = enable_raw_mode();
+            let mut key_str = String::new();
+            if let Ok(Event::Key(event)) = read() {
+                match event.code {
+                    KeyCode::Char(c) => key_str.push(c),
+                    KeyCode::Enter => key_str.push_str("Enter"),
+                    KeyCode::Esc => key_str.push_str("Esc"),
+                    KeyCode::Backspace => key_str.push_str("Backspace"),
+                    KeyCode::Up => key_str.push_str("Up"),
+                    KeyCode::Down => key_str.push_str("Down"),
+                    KeyCode::Left => key_str.push_str("Left"),
+                    KeyCode::Right => key_str.push_str("Right"),
+                    _ => key_str.push_str(&format!("{:?}", event.code)),
+                }
+            }
+            let _ = disable_raw_mode();
+            Ok(Some(key_str))
         }
         "irm" => {
             if args.is_empty() {
