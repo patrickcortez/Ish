@@ -55,4 +55,20 @@ pub enum AstNode {
         operator: String,
         right: Box<AstNode>,
     },
+
+    /// While loop
+    While {
+        condition: Box<AstNode>,
+        body: Vec<AstNode>,
+    },
+
+    /// Function definition
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Vec<AstNode>,
+    },
+
+    /// Return statement
+    Return(Box<AstNode>),
 }

@@ -33,6 +33,7 @@ pub enum Token {
     Foreach,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
+    Return,
 
     // Symbols
     LBrace,         // {
@@ -207,6 +208,7 @@ impl Tokenizer {
                             "for" => tokens.push(Token::For),
                             "foreach" => tokens.push(Token::Foreach),
                             "fn" => tokens.push(Token::Function),
+                            "return" => tokens.push(Token::Return),
                             _ => tokens.push(Token::Word(word)),
                         }
                     }

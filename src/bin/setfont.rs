@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
+#[cfg(not(windows))]
 use std::process::Command;
 
 fn get_vscode_settings_path() -> Option<PathBuf> {

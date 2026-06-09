@@ -34,7 +34,7 @@ fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, 
     
     let mut parser = core::parser::Parser::new(tokens);
     let ast = parser.parse()?;
-    let linter = core::linter::Linter::new();
+    let mut linter = core::linter::Linter::new();
     linter.lint(&ast)?;
     
     executor.execute(&ast, jobs)?;

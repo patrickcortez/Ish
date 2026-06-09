@@ -174,14 +174,22 @@ impl App {
             let mut cursor_pos = 0;
             let mut history_index = self.history.get_all().len();
             let prompt_width = Self::visible_width(&prompt);
+            let mut cursor_state = (0, 0); // (current_row_offset, printed_row_offset)
 
-            let draw_line = |out: &mut std::io::Stdout, buf: &str, pos: usize, sugg: &SuggestionManager, hist: &[String]| -> anyhow::Result<()> {
-                let total_cursor_col = prompt_width + pos as u16;
+            let draw_line = |out: &mut std::io::Stdout, buf: &str, pos: usize, sugg: &SuggestionManager, hist: &[String], state: (u16, u16)| -> anyhow::Result<(u16, u16)> {
+                let (term_width, _) = crossterm::terminal::size().unwrap_or((80, 24));
+                let term_width = if term_width == 0 { 80 } else { term_width };
+                
+                let last_row_offset = state.0;
+                if last_row_offset > 0 {
+                    queue!(out, cursor::MoveUp(last_row_offset))?;
+                }
+                
                 queue!(
                     out,
                     cursor::Hide,
                     cursor::MoveToColumn(0),
-                    Clear(ClearType::UntilNewLine),
+                    Clear(ClearType::FromCursorDown),
                     Print(&prompt),
                     Print(&sugg.highlight(buf))
                 )?;
@@ -192,12 +200,37 @@ impl App {
                     }
                 }
 
-                queue!(out, cursor::MoveToColumn(total_cursor_col), cursor::Show)?;
+                let current_total = prompt_width + pos as u16;
+                let current_row_offset = current_total / term_width;
+                let current_col = current_total % term_width;
+
+                let text_total = prompt_width + buf.len() as u16;
+                
+                let hint_len = if pos == buf.len() {
+                    if let Some(hint) = sugg.get_hint(buf, hist) {
+                        Self::visible_width(&hint)
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                
+                let total_printed_len = text_total + hint_len;
+                let printed_row_offset = total_printed_len / term_width;
+                
+                if printed_row_offset > current_row_offset {
+                    queue!(out, cursor::MoveUp(printed_row_offset - current_row_offset))?;
+                } else if current_row_offset > printed_row_offset {
+                    queue!(out, cursor::MoveDown(current_row_offset - printed_row_offset))?;
+                }
+                
+                queue!(out, cursor::MoveToColumn(current_col), cursor::Show)?;
                 out.flush()?;
-                Ok(())
+                Ok((current_row_offset, printed_row_offset))
             };
 
-            draw_line(&mut stdout, &buffer, cursor_pos, &self.sugg_engine, self.history.get_all())?;
+            cursor_state = draw_line(&mut stdout, &buffer, cursor_pos, &self.sugg_engine, self.history.get_all(), cursor_state)?;
             enable_raw_mode()?;
 
             let mut break_outer = false;
@@ -208,12 +241,20 @@ impl App {
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if cursor_state.1 > cursor_state.0 {
+                                    let _ = queue!(stdout, cursor::MoveDown(cursor_state.1 - cursor_state.0));
+                                    let _ = stdout.flush();
+                                }
                                 buffer.clear();
                                 println!("\r\n^C");
                                 break;
                             }
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 if buffer.is_empty() {
+                                    if cursor_state.1 > cursor_state.0 {
+                                        let _ = queue!(stdout, cursor::MoveDown(cursor_state.1 - cursor_state.0));
+                                        let _ = stdout.flush();
+                                    }
                                     println!("\r\nexit");
                                     break_outer = true;
                                     break;
@@ -277,6 +318,10 @@ impl App {
                                 cursor_pos = 0;
                             }
                             KeyCode::Enter => {
+                                if cursor_state.1 > cursor_state.0 {
+                                    let _ = queue!(stdout, cursor::MoveDown(cursor_state.1 - cursor_state.0));
+                                    let _ = stdout.flush();
+                                }
                                 println!("\r");
                                 cmd = buffer.clone();
                                 break;
@@ -290,7 +335,7 @@ impl App {
                             _ => {}
                         }
                         
-                        draw_line(&mut stdout, &buffer, cursor_pos, &self.sugg_engine, self.history.get_all())?;
+                        cursor_state = draw_line(&mut stdout, &buffer, cursor_pos, &self.sugg_engine, self.history.get_all(), cursor_state)?;
                     }
                 }
             }
@@ -406,7 +451,7 @@ impl App {
                     let mut parser = Parser::new(tokens);
                     match parser.parse() {
                         Ok(ast) => {
-                            let linter = Linter::new();
+                            let mut linter = Linter::new();
                             if let Err(e) = linter.lint(&ast) {
                                 eprintln!("Lint Error: {}", e);
                             } else {
