@@ -23,6 +23,12 @@ Instead of `&&` and `||`, Ish uses the natural language keywords `and then` and 
 > build_project and then run_tests or else echo "Build Failed!"
 ```
 
+**Comparison Operators**:
+Ish supports robust comparison operators natively within the AST for conditional checks: `==`, `!=`, `<`, `>`, `<=`, `>=`.
+```bash
+> if ( $LAST == 0 ) { echo "Success!" }
+```
+
 ### Background Jobs
 Instead of appending an ampersand `&`, use the explicit `job` keyword at the end of the command to send it to the background.
 ```bash
@@ -30,10 +36,19 @@ Instead of appending an ampersand `&`, use the explicit `job` keyword at the end
 ```
 
 ### Redirection
-Ish replaces standard redirection operators (`>`, `<`) with the keywords `to` and `from`.
+Ish replaces obscure redirection operators with explicit, readable keywords:
+- `to` maps to standard output overwrite (`>`)
+- `append to` maps to standard output append (`>>`)
+- `from` maps to standard input file read (`<`)
+- `read doc` handles text stream injection (HereDoc / `<<`)
+- `merge err` securely pipes standard error stream into standard output (`2>&1`)
+- `DevNull` drops streams into the abyss (equivalent to `/dev/null`)
+
 ```bash
-> echo "Hello World" to log.txt
+> echo "Hello World" append to log.txt
 > cat from config.json
+> mycmd merge err to output.log
+> noisy_cmd to DevNull
 ```
 
 ### Parallel Execution
@@ -51,6 +66,11 @@ Assign variables directly without spaces. Access them using the `$` prefix.
 name="IshShell"
 echo "Running: $name"
 ```
+
+**State Variables**:
+Ish provides built-in state variables automatically injected into the environment:
+- `$LAST`: Retrieves the numerical exit code of the most recently executed process.
+- `$1`, `$2`, etc.: Retrieves command-line arguments passed directly to the script.
 
 ### Control Flow
 Ish natively parses `if`, `elif`, and `else` blocks enclosed in curly braces `{}`.

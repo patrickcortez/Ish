@@ -36,3 +36,14 @@ Ish handles normal OS commands natively, but also provides internal built-ins pr
 When running Ish on Windows, the shell seamlessly bridges into the OS.
 - **Object Piping**: When you execute a pipeline consisting entirely of native Windows/PowerShell commands (e.g. `Get-ChildItem : Where-Object Name -eq "test"`), Ish optimizes the execution by aggregating it into a unified native PowerShell pipeline. This means `.NET` objects are fully preserved between commands, exactly like native PowerShell!
 - **Cmdlet Autocomplete**: Ish automatically parses and caches all native PowerShell Cmdlets, Functions, and Aliases in the background when it boots. This means you will immediately get autocomplete suggestions for standard Windows commands like `Invoke-WebRequest` without any configuration.
+
+## Advanced Shell Logic
+Because Ish uses the exact same AST parsing engine (`tokenizer.rs`, `parser.rs`) for both the interactive prompt and `.ish` scripts, **everything available in Ish Scripts is available live in the interactive shell!**
+
+This means right from your prompt, you can use:
+- **English Redirections**: `echo "Hello" append to file.txt` or `cmd merge err to output.log`
+- **State Variables**: `echo $LAST` (previous exit code)
+- **Comparison Operators**: Native `==`, `!=`, `<`, `>`, `<=`, `>=`
+- **Control Flow**: Complex `if`/`elif`/`else` logic directly executed on the fly.
+
+For full syntax details, see the [Ish Scripting Guide](ish_scripting_guide.md).
