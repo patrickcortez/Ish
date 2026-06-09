@@ -227,6 +227,21 @@ impl App {
 
             if cmd == "exit" || cmd == "quit" {
                 break;
+            } else if self.config.current_config.autocd && (cmd.starts_with('/') || cmd.starts_with('\\')) {
+                let path_str = cmd[1..].trim();
+                if path_str.is_empty() {
+                    continue;
+                }
+                let p = std::path::Path::new(path_str);
+                if p.is_dir() {
+                    if let Err(e) = std::env::set_current_dir(p) {
+                        eprintln!("cd error: {}", e);
+                    }
+                    continue;
+                } else {
+                    println!("Ish: directory not found: {}", path_str);
+                    continue;
+                }
             } else if self.config.current_config.autocd && std::path::Path::new(cmd).is_dir() {
                 if let Err(e) = std::env::set_current_dir(cmd) {
                     eprintln!("cd error: {}", e);

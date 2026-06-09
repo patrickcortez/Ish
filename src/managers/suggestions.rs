@@ -199,9 +199,17 @@ impl SuggestionManager {
                 }
                 
                 // Also suggest local files/directories!
-                let files = self.get_file_suggestions(last_token);
+                let is_autocd = last_token.starts_with('/') || last_token.starts_with('\\');
+                let search_token = if is_autocd { &last_token[1..] } else { last_token };
+                
+                let files = self.get_file_suggestions(search_token);
                 for file in files {
-                    let suggestion = format!("{}{}", prefix, file);
+                    let suggestion = if is_autocd {
+                        let slash = last_token.chars().next().unwrap();
+                        format!("{}{}{}", prefix, slash, file)
+                    } else {
+                        format!("{}{}", prefix, file)
+                    };
                     if !results.contains(&suggestion) {
                         results.push(suggestion);
                     }
@@ -307,7 +315,15 @@ impl SuggestionManager {
             // check keywords
             let is_kw = lw == ":" || lw == "to" || lw == "from" || lw == "append" || lw == "read" || lw == "merge" || lw == "err" || lw == "doc" || lw == "then" || lw == "while" || lw == "job" || lw == "if" || lw == "else" || lw == "fn" || lw == "and" || lw == "or";
             
-            let exists = std::path::Path::new(w).exists();
+            let mut check_w = w;
+            if *first && (w.starts_with('/') || w.starts_with('\\')) {
+                check_w = &w[1..];
+            }
+            if check_w.is_empty() {
+                check_w = "."; // Fallback to avoid empty path resolving to false if they just type `/`
+            }
+            
+            let exists = std::path::Path::new(check_w).exists() && check_w != ".";
             let underline_on = if exists { "\x1b[4m" } else { "" };
             let underline_off = if exists { "\x1b[24m" } else { "" };
             
