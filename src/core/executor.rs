@@ -193,13 +193,60 @@ impl Executor {
 
                         let mut c = Command::new("powershell");
                         c.arg("-NoProfile").arg("-Command").arg(full_ps_cmd);
-                        c.stdout(Stdio::piped());
+
+                        // Handle redirections
+                        let mut merge_error = false;
+
+                        // Output redirection (from last node)
+                        if let Some(AstNode::Command { redirect_to, append_to, merge_err, .. }) = nodes.last() {
+                            merge_error = *merge_err;
+                            if let Some(path) = redirect_to {
+                                if path == "DevNull" {
+                                    c.stdout(Stdio::null());
+                                } else {
+                                    let file = File::create(path)?;
+                                    c.stdout(Stdio::from(file));
+                                }
+                            } else if let Some(path) = append_to {
+                                if path == "DevNull" {
+                                    c.stdout(Stdio::null());
+                                } else {
+                                    let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                    c.stdout(Stdio::from(file));
+                                }
+                            } else {
+                                c.stdout(Stdio::piped());
+                            }
+                        } else {
+                            c.stdout(Stdio::piped());
+                        }
+
                         c.stderr(Stdio::piped());
 
-                        if !input.is_empty() {
-                            c.stdin(Stdio::piped());
+                        // Input redirection (from first node)
+                        let mut has_read_doc = false;
+                        if let Some(AstNode::Command { redirect_from, read_doc, .. }) = nodes.first() {
+                            if let Some(path) = redirect_from {
+                                if path == "DevNull" {
+                                    c.stdin(Stdio::null());
+                                } else {
+                                    let file = File::open(path)?;
+                                    c.stdin(Stdio::from(file));
+                                }
+                            } else if read_doc.is_some() {
+                                has_read_doc = true;
+                                c.stdin(Stdio::piped());
+                            } else if !input.is_empty() {
+                                c.stdin(Stdio::piped());
+                            } else {
+                                c.stdin(Stdio::inherit());
+                            }
                         } else {
-                            c.stdin(Stdio::inherit());
+                            if !input.is_empty() {
+                                c.stdin(Stdio::piped());
+                            } else {
+                                c.stdin(Stdio::inherit());
+                            }
                         }
 
                         let mut child = c.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
@@ -211,12 +258,25 @@ impl Executor {
                         }
 
                         let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                        self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
+                        
                         let mut output = String::new();
                         if let Some(mut stdout) = child.stdout.take() {
                             let _ = stdout.read_to_string(&mut output);
                         }
-                        if let Some(mut stderr) = child.stderr.take() {
-                            let _ = stderr.read_to_string(&mut output);
+                        
+                        if merge_error {
+                            if let Some(mut stderr) = child.stderr.take() {
+                                let _ = stderr.read_to_string(&mut output);
+                            }
+                        } else {
+                            if let Some(mut stderr) = child.stderr.take() {
+                                let mut err_out = String::new();
+                                let _ = stderr.read_to_string(&mut err_out);
+                                if !err_out.is_empty() {
+                                    output.push_str(&err_out);
+                                }
+                            }
                         }
 
                         return Ok((status.success(), output));
