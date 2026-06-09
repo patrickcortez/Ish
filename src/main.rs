@@ -29,29 +29,7 @@ fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, 
     let linter = core::linter::Linter::new();
     linter.lint(&ast)?;
     
-    let (_, out) = executor.execute(&ast, jobs, &mut |child, merge_err| {
-        let mut child_out = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            let _ = std::io::Read::read_to_string(&mut stdout, &mut child_out);
-        }
-        if merge_err {
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = std::io::Read::read_to_string(&mut stderr, &mut child_out);
-            }
-        } else {
-            if let Some(mut stderr) = child.stderr.take() {
-                let mut err_out = String::new();
-                let _ = std::io::Read::read_to_string(&mut stderr, &mut err_out);
-                if !err_out.is_empty() {
-                    child_out.push_str(&err_out);
-                }
-            }
-        }
-        Ok(child_out)
-    })?;
-    if !out.is_empty() {
-        print!("{}", out);
-    }
+    executor.execute(&ast, jobs)?;
     Ok(())
 }
 
@@ -93,11 +71,10 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Launch TUI (Phase 2)
-    println!("Launching Ish TUI...");
+    // Launch Shell REPL
     let mut app = ui::App::new();
     if let Err(e) = app.run(&config_manager) {
-        eprintln!("Error running TUI: {}", e);
+        eprintln!("Error running shell: {}", e);
         return ExitCode::FAILURE;
     }
 

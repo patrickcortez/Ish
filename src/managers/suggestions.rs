@@ -3,6 +3,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::sync::{Arc, Mutex};
+use rustyline::hint::{Hint, Hinter};
+use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::Highlighter;
+use rustyline::validate::{Validator, ValidationResult, ValidationContext};
+use rustyline::{Helper, Context};
+
+#[derive(Clone, Debug)]
+pub struct IshHint(String);
+
+impl Hint for IshHint {
+    fn display(&self) -> &str {
+        &self.0
+    }
+    fn completion(&self) -> Option<&str> {
+        Some(&self.0)
+    }
+}
 
 pub struct SuggestionManager {
     path_executables: Arc<Mutex<Vec<String>>>,
@@ -79,96 +96,143 @@ impl SuggestionManager {
             return results;
         }
 
-        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-        let ends_with_space = trimmed.ends_with(char::is_whitespace);
+        // 1. Separate prefix and last_token perfectly preserving whitespace
+        let last_space_idx = input.rfind(char::is_whitespace);
+        let (prefix, last_token) = if let Some(idx) = last_space_idx {
+            let split_pos = idx + 1; // Includes trailing space in prefix
+            (&input[..split_pos], &input[split_pos..])
+        } else {
+            ("", input)
+        };
 
-        // Built-in command contextual suggestions
-        if trimmed.starts_with(':') {
-            if tokens.len() == 1 && !ends_with_space {
-                let builtins = [":Color", ":Toggle", ":Editor"];
-                for b in builtins.iter() {
-                    if b.to_lowercase().starts_with(&tokens[0].to_lowercase()) {
-                        results.push(b.to_string());
-                    }
-                }
-                if !results.is_empty() { return results; }
-            } else if tokens[0].eq_ignore_ascii_case(":Color") {
-                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
-                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
-                    let targets = ["--inputbox", "--output", "--banner"];
-                    for t in targets.iter() {
-                        if t.to_lowercase().starts_with(&partial.to_lowercase()) {
-                            results.push(t.to_string());
-                        }
-                    }
-                    return results;
-                } else if (tokens.len() == 2 && ends_with_space) || (tokens.len() == 3 && !ends_with_space) {
-                    let partial = if tokens.len() == 3 { tokens[2] } else { "" };
-                    let colors = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "White", "Black", "Gray", "DarkGray", "LightRed", "LightGreen", "LightBlue", "LightCyan", "LightMagenta", "LightYellow"];
-                    for c in colors.iter() {
-                        if c.to_lowercase().starts_with(&partial.to_lowercase()) {
-                            results.push(c.to_string());
-                        }
-                    }
-                    return results;
-                }
-            } else if tokens[0].eq_ignore_ascii_case(":Toggle") {
-                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
-                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
-                    let flags = ["--autocd", "--suggestions"];
-                    for f in flags.iter() {
-                        if f.to_lowercase().starts_with(&partial.to_lowercase()) {
-                            results.push(f.to_string());
-                        }
-                    }
-                    return results;
-                } else if (tokens.len() == 2 && ends_with_space) || (tokens.len() == 3 && !ends_with_space) {
-                    let partial = if tokens.len() == 3 { tokens[2] } else { "" };
-                    let bools = ["true", "false"];
-                    for b in bools.iter() {
-                        if b.to_lowercase().starts_with(&partial.to_lowercase()) {
-                            results.push(b.to_string());
-                        }
-                    }
-                    return results;
-                }
-            } else if tokens[0].eq_ignore_ascii_case(":Editor") {
-                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
-                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
-                    let editors = ["vim", "nano", "code", "nvim", "emacs"];
-                    for e in editors.iter() {
-                        if e.to_lowercase().starts_with(&partial.to_lowercase()) {
-                            results.push(e.to_string());
-                        }
-                    }
-                    if !results.is_empty() { return results; }
-                }
-            }
+        // 2. Determine Context
+        #[derive(PartialEq)]
+        enum Context {
+            Command,
+            EnvVar,
+            Argument, // Files/Directories
         }
 
-        // 1. If it has a space, suggest files/directories from the last token
-        if ends_with_space || tokens.len() > 1 {
-            let last_token = if ends_with_space {
-                ""
+        let mut context;
+        
+        if prefix.is_empty() {
+            context = Context::Command;
+        } else {
+            let trimmed_prefix = prefix.trim_end();
+            let words: Vec<&str> = trimmed_prefix.split_whitespace().collect();
+            
+            if let Some(&last_word) = words.last() {
+                let lw = last_word.to_lowercase();
+                if lw == ":" || lw == "then" || lw == "while" || lw == "job" {
+                    context = Context::Command;
+                } else if words.len() >= 2 {
+                    let last_two = format!("{} {}", words[words.len() - 2].to_lowercase(), lw);
+                    if last_two == "and then" || last_two == "or else" {
+                        context = Context::Command;
+                    } else {
+                        context = Context::Argument;
+                    }
+                } else {
+                    context = Context::Argument;
+                }
             } else {
-                tokens.last().unwrap()
-            };
-            results.extend(self.get_file_suggestions(last_token));
-            return results; // Only suggest files/args after command is typed
-        }
-
-        // 2. Suggest from History (Commands)
-        for h in history.iter().rev() {
-            if h.starts_with(trimmed) && !results.contains(h) {
-                results.push(h.clone());
+                context = Context::Command; // Should not happen since prefix wasn't empty
             }
         }
 
-        // 3. Suggest from PATH executables
-        if let Ok(execs) = self.path_executables.lock() {
-            for exec in execs.iter() {
-                if exec.starts_with(trimmed) && !results.contains(exec) {
-                    results.push(exec.clone());
+        // Override if starts with '$'
+        if last_token.starts_with('$') {
+            context = Context::EnvVar;
+        }
+
+        // 3. Built-ins check (if Command context AND first word in line starts with ':')
+        if context == Context::Command && last_token.starts_with(':') && prefix.trim().is_empty() {
+            // Suggest built-ins
+            let builtins = [":Toggle", ":Editor"];
+            for b in builtins.iter() {
+                if b.to_lowercase().starts_with(&last_token.to_lowercase()) {
+                    results.push(format!("{}{}", prefix, b));
+                }
+            }
+            if !results.is_empty() { return results; }
+        }
+
+        // Also handle built-in flags if we are in argument context for a built-in
+        if context == Context::Argument {
+            let words: Vec<&str> = prefix.split_whitespace().collect();
+            if let Some(&first_word) = words.first() {
+                if first_word.eq_ignore_ascii_case(":Toggle") {
+                    if words.len() == 1 { // e.g. ":Toggle "
+                        let flags = ["--autocd", "--suggestions"];
+                        for f in flags.iter() {
+                            if f.to_lowercase().starts_with(&last_token.to_lowercase()) {
+                                results.push(format!("{}{}", prefix, f));
+                            }
+                        }
+                        return results;
+                    } else if words.len() == 2 { // e.g. ":Toggle --autocd "
+                        let bools = ["true", "false"];
+                        for b in bools.iter() {
+                            if b.to_lowercase().starts_with(&last_token.to_lowercase()) {
+                                results.push(format!("{}{}", prefix, b));
+                            }
+                        }
+                        return results;
+                    }
+                } else if first_word.eq_ignore_ascii_case(":Editor") {
+                    if words.len() == 1 {
+                        let editors = ["vim", "nano", "code", "nvim", "emacs"];
+                        for e in editors.iter() {
+                            if e.to_lowercase().starts_with(&last_token.to_lowercase()) {
+                                results.push(format!("{}{}", prefix, e));
+                            }
+                        }
+                        return results;
+                    }
+                }
+            }
+        }
+
+        // 4. Generate context-specific suggestions
+        match context {
+            Context::Command => {
+                // Suggest from history first
+                for h in history.iter().rev() {
+                    if h.starts_with(input) && !results.contains(h) {
+                        results.push(h.clone());
+                    }
+                }
+                
+                // Then suggest commands/executables
+                if let Ok(execs) = self.path_executables.lock() {
+                    for exec in execs.iter() {
+                        if exec.starts_with(last_token) {
+                            let suggestion = format!("{}{}", prefix, exec);
+                            if !results.contains(&suggestion) {
+                                results.push(suggestion);
+                            }
+                        }
+                    }
+                }
+            }
+            Context::EnvVar => {
+                let var_prefix = &last_token[1..];
+                for (key, _) in std::env::vars() {
+                    if key.to_lowercase().starts_with(&var_prefix.to_lowercase()) {
+                        let suggestion = format!("{}${}", prefix, key);
+                        if !results.contains(&suggestion) {
+                            results.push(suggestion);
+                        }
+                    }
+                }
+            }
+            Context::Argument => {
+                let files = self.get_file_suggestions(last_token);
+                for file in files {
+                    let suggestion = format!("{}{}", prefix, file);
+                    if !results.contains(&suggestion) {
+                        results.push(suggestion);
+                    }
                 }
             }
         }
@@ -215,3 +279,168 @@ impl SuggestionManager {
         results
     }
 }
+
+impl Hinter for SuggestionManager {
+    type Hint = IshHint;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if line.is_empty() || pos < line.len() {
+            return None;
+        }
+        
+        // Extract recent history strings
+        let mut history_items = Vec::new();
+        for i in (0.._ctx.history().len()).rev() {
+            if let Some(h) = _ctx.history().get(i, rustyline::history::SearchDirection::Forward).ok().flatten() {
+                history_items.push(h.entry.to_string());
+            }
+        }
+        
+        let suggestions = self.get_suggestions(line, &history_items);
+        
+        if let Some(first) = suggestions.first() {
+            if first.starts_with(line) {
+                return Some(IshHint(first[line.len()..].to_string()));
+            }
+        }
+        None
+    }
+}
+
+impl Completer for SuggestionManager {
+    type Candidate = Pair;
+
+    fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        let mut history_items = Vec::new();
+        for i in (0.._ctx.history().len()).rev() {
+            if let Some(h) = _ctx.history().get(i, rustyline::history::SearchDirection::Forward).ok().flatten() {
+                history_items.push(h.entry.to_string());
+            }
+        }
+
+        let suggestions = self.get_suggestions(&line[..pos], &history_items);
+        
+        // Find the boundary of the last word
+        let start = line[..pos].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+        
+        let mut candidates = Vec::new();
+        for sugg in suggestions {
+            let word = &sugg[start..];
+            candidates.push(Pair {
+                display: word.to_string(),
+                replacement: word.to_string(),
+            });
+        }
+        Ok((start, candidates))
+    }
+}
+
+impl Highlighter for SuggestionManager {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+        let mut colored = String::new();
+        
+        let c_cmd = "\x1b[96m"; // Light cyan
+        let c_arg = "\x1b[92m"; // Light green
+        let c_log = "\x1b[93m"; // Light yellow
+        let c_quo = "\x1b[38;5;136m"; // Light brown
+        let c_bra = "\x1b[93m"; // Yellow
+        let reset = "\x1b[0m";
+
+        let mut in_quotes = false;
+        let mut quote_char = '\0';
+        let mut word_buf = String::new();
+        let mut expect_cmd = true; // First word of a command
+        
+        let flush_word = |word: &mut String, out: &mut String, first: &mut bool| {
+            if word.is_empty() { return; }
+            let w = word.as_str();
+            let lw = w.to_lowercase();
+            // check keywords
+            let is_kw = lw == ":" || lw == "to" || lw == "from" || lw == "append" || lw == "read" || lw == "merge" || lw == "err" || lw == "doc" || lw == "then" || lw == "while" || lw == "job" || lw == "if" || lw == "else" || lw == "fn" || lw == "and" || lw == "or";
+            
+            if is_kw {
+                out.push_str(c_log);
+                out.push_str(w);
+                out.push_str(reset);
+                if lw == ":" || lw == "then" || lw == "else" || lw == "while" || lw == "job" || lw == "fn" {
+                    *first = true; // Next word is a command
+                }
+            } else if *first {
+                out.push_str(c_cmd);
+                out.push_str(w);
+                out.push_str(reset);
+                *first = false;
+            } else {
+                out.push_str(c_arg);
+                out.push_str(w);
+                out.push_str(reset);
+            }
+            word.clear();
+        };
+
+        let mut quote_buf = String::new();
+
+        for c in line.chars() {
+            if in_quotes {
+                quote_buf.push(c);
+                if c == quote_char {
+                    colored.push_str(c_quo);
+                    colored.push_str(&quote_buf);
+                    colored.push_str(reset);
+                    quote_buf.clear();
+                    in_quotes = false;
+                }
+            } else if c == '"' || c == '\'' {
+                flush_word(&mut word_buf, &mut colored, &mut expect_cmd);
+                in_quotes = true;
+                quote_char = c;
+                quote_buf.push(c);
+            } else if c == '[' || c == ']' || c == '{' || c == '}' || c == '(' || c == ')' {
+                flush_word(&mut word_buf, &mut colored, &mut expect_cmd);
+                colored.push_str(c_bra);
+                colored.push(c);
+                colored.push_str(reset);
+            } else if c.is_whitespace() {
+                flush_word(&mut word_buf, &mut colored, &mut expect_cmd);
+                colored.push(c);
+            } else {
+                word_buf.push(c);
+            }
+        }
+        
+        flush_word(&mut word_buf, &mut colored, &mut expect_cmd);
+        
+        if in_quotes {
+            // Unclosed quote
+            colored.push_str(c_quo);
+            colored.push_str(&quote_buf);
+            colored.push_str(reset);
+        }
+
+        std::borrow::Cow::Owned(colored)
+    }
+
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        default: bool,
+    ) -> std::borrow::Cow<'b, str> {
+        if default {
+            return std::borrow::Cow::Borrowed(prompt);
+        }
+        
+        std::borrow::Cow::Borrowed(prompt)
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
+        std::borrow::Cow::Owned(format!("\x1b[90m{}\x1b[0m", hint))
+    }
+}
+
+impl Validator for SuggestionManager {
+    fn validate(&self, _ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        Ok(ValidationResult::Valid(None))
+    }
+}
+
+impl Helper for SuggestionManager {}

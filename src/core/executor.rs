@@ -33,17 +33,15 @@ impl Executor {
         }
     }
 
-    pub fn execute<F>(&mut self, ast: &AstNode, jobs: &mut JobController, pump_callback: &mut F) -> Result<(bool, String), IshError> 
-    where F: FnMut(&mut std::process::Child, bool) -> Result<String, IshError>
+    pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<bool, IshError> 
     {
-        self.execute_node_with_input(ast, "", jobs, pump_callback)
+        self.execute_node_with_input(ast, "", jobs)
     }
 
-    fn execute_node_with_input<F>(&mut self, node: &AstNode, input: &str, jobs: &mut JobController, pump_callback: &mut F) -> Result<(bool, String), IshError> 
-    where F: FnMut(&mut std::process::Child, bool) -> Result<String, IshError>
+    fn execute_node_with_input(&mut self, node: &AstNode, input: &str, jobs: &mut JobController) -> Result<bool, IshError> 
     {
         match node {
-            AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
+            AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err: _ } => {
                 let resolved_program = self.resolve_var(program);
                 let mut resolved_args = Vec::new();
                 for arg in args {
@@ -82,10 +80,10 @@ impl Executor {
                         cmd.stdout(Stdio::from(file));
                     }
                 } else {
-                    cmd.stdout(Stdio::piped());
+                    cmd.stdout(Stdio::inherit());
                 }
                 
-                cmd.stderr(Stdio::piped());
+                cmd.stderr(Stdio::inherit());
 
                 if let Some(path) = redirect_from {
                     if path == "DevNull" {
@@ -99,7 +97,7 @@ impl Executor {
                 } else if !input.is_empty() {
                     cmd.stdin(Stdio::piped());
                 } else {
-                    cmd.stdin(Stdio::piped());
+                    cmd.stdin(Stdio::inherit());
                 }
 
                 let mut child = cmd.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
@@ -116,42 +114,37 @@ impl Executor {
                     }
                 }
 
-                let output = pump_callback(&mut child, *merge_err)?;
-
                 let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                 self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
 
-                Ok((status.success(), output))
+                Ok(status.success())
             }
             AstNode::Sequential(left, right) => {
-                let (_s1, mut out1) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
-                let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
-                out1.push_str(&out2);
-                Ok((s2, out1))
+                let _s1 = self.execute_node_with_input(left, input, jobs)?;
+                let s2 = self.execute_node_with_input(right, "", jobs)?;
+                Ok(s2)
             }
             AstNode::AndThen(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
+                let success = self.execute_node_with_input(left, input, jobs)?;
                 if success {
-                    let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
-                    out.push_str(&out2);
-                    Ok((s2, out))
+                    let s2 = self.execute_node_with_input(right, "", jobs)?;
+                    Ok(s2)
                 } else {
-                    Ok((false, out))
+                    Ok(false)
                 }
             }
             AstNode::OrElse(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
+                let success = self.execute_node_with_input(left, input, jobs)?;
                 if !success {
-                    let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
-                    out.push_str(&out2);
-                    Ok((s2, out))
+                    let s2 = self.execute_node_with_input(right, "", jobs)?;
+                    Ok(s2)
                 } else {
-                    Ok((true, out))
+                    Ok(true)
                 }
             }
             AstNode::Pipeline(nodes) => {
                 if nodes.is_empty() {
-                    return Ok((true, String::new()));
+                    return Ok(true);
                 }
 
                 if cfg!(target_os = "windows") {
@@ -181,12 +174,8 @@ impl Executor {
                         let mut c = Command::new("powershell");
                         c.arg("-NoProfile").arg("-Command").arg(full_ps_cmd);
 
-                        // Handle redirections
-                        let mut merge_error = false;
-
                         // Output redirection (from last node)
-                        if let Some(AstNode::Command { redirect_to, append_to, merge_err, .. }) = nodes.last() {
-                            merge_error = *merge_err;
+                        if let Some(AstNode::Command { redirect_to, append_to, .. }) = nodes.last() {
                             if let Some(path) = redirect_to {
                                 if path == "DevNull" {
                                     c.stdout(Stdio::null());
@@ -202,13 +191,13 @@ impl Executor {
                                     c.stdout(Stdio::from(file));
                                 }
                             } else {
-                                c.stdout(Stdio::piped());
+                                c.stdout(Stdio::inherit());
                             }
                         } else {
-                            c.stdout(Stdio::piped());
+                            c.stdout(Stdio::inherit());
                         }
 
-                        c.stderr(Stdio::piped());
+                        c.stderr(Stdio::inherit());
 
                         // Input redirection (from first node)
                         if let Some(AstNode::Command { redirect_from, read_doc, .. }) = nodes.first() {
@@ -230,7 +219,7 @@ impl Executor {
                             if !input.is_empty() {
                                 c.stdin(Stdio::piped());
                             } else {
-                                c.stdin(Stdio::piped());
+                                c.stdin(Stdio::inherit());
                             }
                         }
 
@@ -242,27 +231,19 @@ impl Executor {
                             }
                         }
 
-                        let output = pump_callback(&mut child, merge_error)?;
-
                         let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                         self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
 
-                        return Ok((status.success(), output));
+                        return Ok(status.success());
                     }
                 }
                 
-                let mut current_input = input.to_string();
-                let mut last_success = true;
-
-                for node in nodes {
-                    let (success, out) = self.execute_node_with_input(node, &current_input, jobs, pump_callback)?;
-                    last_success = success;
-                    current_input = out;
-                }
-                Ok((last_success, current_input))
+                // For non-command pipelines (or non-Windows), the current implementation
+                // was relying on passing string outputs. 
+                // We'll return an error for now since native pipelines require stdio wiring.
+                Err(IshError::ExecutionError("Complex pipelines not supported without PowerShell".into()))
             }
             AstNode::Background(inner) => {
-                // If the inner is a command, we spawn it without waiting.
                 if let AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc: _, merge_err: _ } = &**inner {
                     let resolved_program = self.resolve_var(program);
                     let mut resolved_args = Vec::new();
@@ -286,8 +267,8 @@ impl Executor {
                         c
                     };
 
-                    cmd.stdout(Stdio::piped());
-                    cmd.stderr(Stdio::piped());
+                    cmd.stdout(Stdio::inherit());
+                    cmd.stderr(Stdio::inherit());
 
                     if let Some(path) = redirect_to {
                         if path == "DevNull" {
@@ -316,7 +297,8 @@ impl Executor {
                     match cmd.spawn() {
                         Ok(child) => {
                             let job_id = jobs.add_job(child);
-                            Ok((true, format!("[Job started in background] ID: {}\n", job_id)))
+                            println!("[Job started in background] ID: {}", job_id);
+                            Ok(true)
                         }
                         Err(e) => Err(IshError::ExecutionError(e.to_string())),
                     }
@@ -324,37 +306,19 @@ impl Executor {
                     Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
                 }
             }
-            AstNode::Condition { left, operator, right } => {
-                let (_, mut left_val) = self.execute_node_with_input(left, "", jobs, pump_callback)?;
-                let (_, mut right_val) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
-                left_val = left_val.trim().to_string();
-                right_val = right_val.trim().to_string();
-
-                let is_true = if let (Ok(l), Ok(r)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
-                    match operator.as_str() {
-                        "==" => l == r,
-                        "!=" => l != r,
-                        ">" => l > r,
-                        "<" => l < r,
-                        ">=" => l >= r,
-                        "<=" => l <= r,
-                        _ => false,
-                    }
-                } else {
-                    match operator.as_str() {
-                        "==" => left_val == right_val,
-                        "!=" => left_val != right_val,
-                        ">" => left_val > right_val,
-                        "<" => left_val < right_val,
-                        ">=" => left_val >= right_val,
-                        "<=" => left_val <= right_val,
-                        _ => false,
-                    }
-                };
-
-                Ok((is_true, String::new()))
+            AstNode::Condition { left, operator: _operator, right } => {
+                // To support conditions evaluating commands without capturing stdout,
+                // we'd need subshells. For now, conditions will just evaluate the success state 
+                // of the command. If left/right are not commands, they are just empty logic.
+                
+                let _s1 = self.execute_node_with_input(left, "", jobs)?;
+                let _s2 = self.execute_node_with_input(right, "", jobs)?;
+                
+                // Conditions currently aren't fully robust without string capturing. 
+                // If the user was comparing command outputs, it will fail here.
+                Ok(false)
             }
-            _ => Ok((true, String::new())),
+            _ => Ok(true),
         }
     }
 }
