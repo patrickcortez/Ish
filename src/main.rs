@@ -37,6 +37,8 @@ fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, 
     let mut linter = core::linter::Linter::new();
     linter.lint(&ast)?;
     
+
+
     executor.execute(&ast, jobs)?;
     Ok(())
 }

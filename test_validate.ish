@@ -1,0 +1,13 @@
+fn validate_config() {
+    iecho "ENTERED validate_config"
+    iecho "Checking..."
+    if ( $config[mode] == "production" ) {
+        iecho "Production mode verified."
+        return "SUCCESS"
+    } else {
+        iecho "Development mode detected."
+        return "DEV_MODE"
+    }
+}
+let config = Map("mode", "production", )
+validate_config

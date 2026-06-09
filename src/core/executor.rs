@@ -98,17 +98,46 @@ impl Executor {
         result
     }
 
+    fn resolve_executable(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
+        if program.ends_with(".ish") {
+            let path = std::path::Path::new(program);
+            if path.exists() {
+                let mut new_args = vec![program.to_string()];
+                new_args.extend_from_slice(args);
+                let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("ish"));
+                return (exe.to_string_lossy().to_string(), new_args);
+            }
+        }
+        (program.to_string(), args.to_vec())
+    }
+
     fn capture_output(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<String, IshError> {
         let temp_dir = std::env::temp_dir();
         let file_name = format!("ish_cap_{}_{}.tmp", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
         let temp_path = temp_dir.join(file_name);
         let path_str = temp_path.to_str().unwrap();
 
-        self.execute_node_with_input(node, "", Some(path_str), jobs)?;
-
-        let out = std::fs::read_to_string(&temp_path).unwrap_or_default();
-        let _ = std::fs::remove_file(&temp_path);
-        Ok(out.trim().to_string())
+        match self.execute_node_with_input(node, "", Some(path_str), jobs) {
+            Ok(_) => {
+                let out = std::fs::read_to_string(&temp_path).unwrap_or_default();
+                let _ = std::fs::remove_file(&temp_path);
+                Ok(out.trim().to_string())
+            }
+            Err(IshError::ExecutionError(e)) if e.starts_with("program not found: ") => {
+                let _ = std::fs::remove_file(&temp_path);
+                if let AstNodeKind::Command { program, args, .. } = &node.kind {
+                    let expected_err = format!("program not found: {}", self.resolve_var(program));
+                    if e == expected_err && args.is_empty() {
+                        return Ok(self.resolve_var(program));
+                    }
+                }
+                Err(IshError::ExecutionError(e))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                Err(e)
+            }
+        }
     }
 
     pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<bool, IshError> 
@@ -152,7 +181,9 @@ impl Executor {
                     return Ok(success);
                 }
 
-                match crate::core::utils::execute_internal(&resolved_program, &resolved_args) {
+                let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
+
+                match crate::core::utils::execute_internal(&final_program, &final_args) {
                     Ok(Some(output)) => {
                         self.last_exit_code = 0;
                         if let Some(path) = out_file {
@@ -196,8 +227,8 @@ impl Executor {
                     Ok(None) => {}
                 }
 
-                let mut cmd = Command::new(&resolved_program);
-                cmd.args(&resolved_args);
+                let mut cmd = Command::new(&final_program);
+                cmd.args(&final_args);
 
                 if let Some(path) = out_file {
                     let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -244,7 +275,13 @@ impl Executor {
                     cmd.stdin(Stdio::inherit());
                 }
 
-                let mut child = cmd.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                let mut child = cmd.spawn().map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        IshError::ExecutionError(format!("program not found: {}", final_program))
+                    } else {
+                        IshError::ExecutionError(e.to_string())
+                    }
+                })?;
 
                 if let Some(doc) = read_doc {
                     if let Some(mut stdin) = child.stdin.take() {
@@ -327,7 +364,9 @@ impl Executor {
                             continue;
                         }
 
-                        match crate::core::utils::execute_internal(&resolved_program, &resolved_args) {
+                        let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
+
+                        match crate::core::utils::execute_internal(&final_program, &final_args) {
                             Ok(Some(output)) => {
                                 self.last_exit_code = 0;
                                 last_cmd_success = true;
@@ -359,8 +398,8 @@ impl Executor {
                             Ok(None) => {}
                         }
 
-                        let mut cmd = Command::new(&resolved_program);
-                        cmd.args(&resolved_args);
+                        let mut cmd = Command::new(&final_program);
+                        cmd.args(&final_args);
 
                         // stdin precedence: explicit redirect > read_doc > pipe from previous > input string
                         if let Some(path) = redirect_from {
@@ -420,7 +459,13 @@ impl Executor {
                             cmd.stderr(Stdio::inherit());
                         }
 
-                        let mut child = cmd.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                        let mut child = cmd.spawn().map_err(|e| {
+                            if e.kind() == std::io::ErrorKind::NotFound {
+                                IshError::ExecutionError(format!("program not found: {}", final_program))
+                            } else {
+                                IshError::ExecutionError(e.to_string())
+                            }
+                        })?;
 
                         if read_doc.is_some() {
                             if let Some(doc) = read_doc {
@@ -468,8 +513,10 @@ impl Executor {
                     if self.functions.contains_key(&resolved_program) {
                         return Err(IshError::ExecutionError("Cannot run custom functions in background via AstNodeKind::Background currently".into()));
                     }
-                    let mut cmd = Command::new(&resolved_program);
-                    cmd.args(&resolved_args);
+
+                    let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
+                    let mut cmd = Command::new(&final_program);
+                    cmd.args(&final_args);
 
                     if let Some(path) = out_file {
                         let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -525,7 +572,13 @@ impl Executor {
                             println!("[Job started in background] ID: {}", job_id);
                             Ok(true)
                         }
-                        Err(e) => Err(IshError::ExecutionError(e.to_string())),
+                        Err(e) => {
+                            if e.kind() == std::io::ErrorKind::NotFound {
+                                Err(IshError::ExecutionError(format!("program not found: {}", final_program)))
+                            } else {
+                                Err(IshError::ExecutionError(e.to_string()))
+                            }
+                        }
                     }
                 } else {
                     Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
@@ -579,6 +632,9 @@ impl Executor {
                             m.insert(k.clone(), IshValue::String(self.capture_output(v, jobs)?));
                         }
                         IshValue::Map(m)
+                    }
+                    AstNodeKind::StringLiteral(s) => {
+                        IshValue::String(self.resolve_var(s))
                     }
                     _ => IshValue::String(self.capture_output(value, jobs)?),
                 };
@@ -652,6 +708,17 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::Array(_) | AstNodeKind::Map(_) => {
+                Ok(true)
+            }
+            AstNodeKind::StringLiteral(s) => {
+                let resolved = self.resolve_var(s);
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(resolved.as_bytes());
+                } else if !resolved.is_empty() {
+                    print!("{}", resolved);
+                    let _ = std::io::stdout().flush();
+                }
                 Ok(true)
             }
             AstNodeKind::Return(inner) => {

@@ -7,7 +7,7 @@ iecho "Third element is: $my_array[2]"
 
 iecho "Iterating through array using foreach loop with skip:"
 
-foreach ( fruit in $my_array ) {
+foreach fruit in $my_array {
     if ( $fruit == "cherry" ) {
         iecho "Skipping cherry..."
         continue
@@ -22,8 +22,10 @@ foreach ( fruit in $my_array ) {
 }
 
 iecho "Iterating through standard for loop:"
-for ( i = 0, $i < 3 ) {
+let i = 0
+while ( $i < 3 ) {
     iecho "For iteration: $i"
+    let i = expr $i + 1
 }
 
 iecho "--- Test 03 Completed ---"

@@ -1,6 +1,6 @@
 iecho "--- Starting Test 04: Maps & Functions ---"
 
-let config = Map("version", "1.0", "author", "Cortez", "mode", "production")
+let config = Map("version", "1.0", "author", "Cortez", "mode", "production", )
 
 iecho "Config loaded:"
 iecho "Version: $config[version]"

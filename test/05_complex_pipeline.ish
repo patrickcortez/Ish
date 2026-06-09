@@ -16,8 +16,10 @@ irm temp_task.ish
 let target_iterations = expr 20 / 4
 
 iecho "Running parallel loop..."
-for ( i = 0, $i < $target_iterations ) {
+let i = 0
+while ( $i < $target_iterations ) {
     iecho "Main Thread Iteration: $i" while iecho "Parallel Thread Iteration: $i"
+    let i = expr $i + 1
 }
 
 iecho "--- Test 05 Completed ---"

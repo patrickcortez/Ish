@@ -2,6 +2,7 @@
 pub enum TokenKind {
     Word(String),
     Variable(String),
+    StringLiteral(String),
 
     // Ish custom syntax
     Pipe,           // :
@@ -31,6 +32,7 @@ pub enum TokenKind {
     Else,
     For,
     Foreach,
+    Let,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
@@ -143,6 +145,10 @@ impl Tokenizer {
                     self.advance();
                     TokenKind::RBracket
                 }
+                '\n' => {
+                    self.advance();
+                    TokenKind::Semicolon
+                }
                 '=' => {
                     self.advance();
                     if self.position < self.input.len() && self.input[self.position] == '=' {
@@ -190,7 +196,7 @@ impl Tokenizer {
                 }
                 '"' | '\'' => {
                     let string_val = self.read_string(ch)?;
-                    TokenKind::Word(string_val)
+                    TokenKind::StringLiteral(string_val)
                 }
                 _ => {
                     let word = self.read_word();
@@ -257,6 +263,7 @@ impl Tokenizer {
                             "else" => TokenKind::Else,
                             "for" => TokenKind::For,
                             "foreach" => TokenKind::Foreach,
+                            "let" => TokenKind::Let,
                             "fn" => TokenKind::Function,
                             "return" => TokenKind::Return,
                             "break" => TokenKind::Break,
@@ -277,7 +284,7 @@ impl Tokenizer {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.position < self.input.len() && self.input[self.position].is_whitespace() {
+        while self.position < self.input.len() && self.input[self.position].is_whitespace() && self.input[self.position] != '\n' {
             self.advance();
         }
     }

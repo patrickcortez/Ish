@@ -68,6 +68,9 @@ pub enum AstNodeKind {
     /// Background execution (e.g., `cmd job`)
     Background(Box<AstNode>),
 
+    /// String Literal
+    StringLiteral(String),
+
     /// If conditional
     If {
         condition: Box<AstNode>,

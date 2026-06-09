@@ -145,8 +145,8 @@ impl Linter {
                 }
                 self.defined_vars = prev_vars;
             }
-            AstNodeKind::Break | AstNodeKind::Continue => {
-                if self.in_loop_depth == 0 {
+            AstNodeKind::Break | AstNodeKind::Continue | AstNodeKind::StringLiteral(_) => {
+                if self.in_loop_depth == 0 && matches!(node.kind, AstNodeKind::Break | AstNodeKind::Continue) {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'break' or 'continue' used outside of a loop", node.line, node.column)));
                 }
             }
