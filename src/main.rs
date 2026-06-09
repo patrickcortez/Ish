@@ -16,6 +16,14 @@ struct Args {
 
     /// Path to a script file to execute
     script: Option<String>,
+
+    /// Login shell (ignored, for chsh/Termux compatibility)
+    #[arg(short, long)]
+    login: bool,
+
+    /// Interactive shell (ignored, for compatibility)
+    #[arg(short, long)]
+    interactive: bool,
 }
 
 fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
