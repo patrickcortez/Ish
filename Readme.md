@@ -56,7 +56,7 @@ Processes with screen buffers will takeover the screen as rightfully so.
 
 - `Job Control` : As with every shell this provides a way to control the jobs running in the background. You can bring them to the foreground with "fg", background with "bg" and kill with "kill" and many more tools to achieve sophisticated job management.
 
-- `Scripting Environment` : For scripting the **Ish** interpreter will have variables (with string interpolation), `[1,2,3]` Arrays, `Map(k, v)` Maps, if elif and else, nesting, loops (for, while and foreach with `break` and `continue`) and functions. With the `.ish` extension, *.ish* script files can be executed directly `./myscript.ish` as long as the syntax passes the *Linter*.
+- `Scripting Environment` : For scripting the **Ish** interpreter will have variables (with string interpolation), `[1,2,3]` Arrays, `Map(k, v)` Maps, if elif and else, nesting, loops (for, while and foreach with `break` and `continue`) and functions. With the `.ish` extension, *.ish* script files can be executed directly `./myscript.ish` as long as the syntax passes the *Linter*. **Ish** includes an advanced Location-Aware Linter that will pinpoint exactly which line and column a syntax error occurred on to make debugging your scripts seamless.
 
 - `Startup Script` : A proper shell should have its own start-up script, which obviously is named `.ishrc`.
 which holds the startup configuration of **Ish**.

@@ -134,3 +134,9 @@ fn build_and_deploy() {
 
 build_and_deploy
 ```
+
+### Advanced Linting & Error Reporting
+Ish features a professional-grade syntax linter built directly into the parser. If your script contains any syntax errors (such as missing loop bodies, unclosed functions, or mismatched pipelines), the linter will safely catch the error and provide a precise line and column location to help you fix it:
+```bash
+Linter Error at Line 14, Column 5: 'if' statement has an empty body
+```
