@@ -3,23 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::sync::{Arc, Mutex};
-use rustyline::hint::{Hint, Hinter};
-use rustyline::completion::{Completer, Pair};
-use rustyline::highlight::Highlighter;
-use rustyline::validate::{Validator, ValidationResult, ValidationContext};
-use rustyline::{Helper, Context};
-
-#[derive(Clone, Debug)]
-pub struct IshHint(String);
-
-impl Hint for IshHint {
-    fn display(&self) -> &str {
-        &self.0
-    }
-    fn completion(&self) -> Option<&str> {
-        Some(&self.0)
-    }
-}
 
 pub struct SuggestionManager {
     path_executables: Arc<Mutex<Vec<String>>>,
@@ -214,6 +197,15 @@ impl SuggestionManager {
                         }
                     }
                 }
+                
+                // Also suggest local files/directories!
+                let files = self.get_file_suggestions(last_token);
+                for file in files {
+                    let suggestion = format!("{}{}", prefix, file);
+                    if !results.contains(&suggestion) {
+                        results.push(suggestion);
+                    }
+                }
             }
             Context::EnvVar => {
                 let var_prefix = &last_token[1..];
@@ -278,65 +270,22 @@ impl SuggestionManager {
         }
         results
     }
-}
-
-impl Hinter for SuggestionManager {
-    type Hint = IshHint;
-
-    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
-        if line.is_empty() || pos < line.len() {
+    pub fn get_hint(&self, line: &str, history: &[String]) -> Option<String> {
+        if line.is_empty() {
             return None;
         }
         
-        // Extract recent history strings
-        let mut history_items = Vec::new();
-        for i in (0.._ctx.history().len()).rev() {
-            if let Some(h) = _ctx.history().get(i, rustyline::history::SearchDirection::Forward).ok().flatten() {
-                history_items.push(h.entry.to_string());
-            }
-        }
-        
-        let suggestions = self.get_suggestions(line, &history_items);
+        let suggestions = self.get_suggestions(line, history);
         
         if let Some(first) = suggestions.first() {
             if first.starts_with(line) {
-                return Some(IshHint(first[line.len()..].to_string()));
+                return Some(first[line.len()..].to_string());
             }
         }
         None
     }
-}
 
-impl Completer for SuggestionManager {
-    type Candidate = Pair;
-
-    fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        let mut history_items = Vec::new();
-        for i in (0.._ctx.history().len()).rev() {
-            if let Some(h) = _ctx.history().get(i, rustyline::history::SearchDirection::Forward).ok().flatten() {
-                history_items.push(h.entry.to_string());
-            }
-        }
-
-        let suggestions = self.get_suggestions(&line[..pos], &history_items);
-        
-        // Find the boundary of the last word
-        let start = line[..pos].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
-        
-        let mut candidates = Vec::new();
-        for sugg in suggestions {
-            let word = &sugg[start..];
-            candidates.push(Pair {
-                display: word.to_string(),
-                replacement: word.to_string(),
-            });
-        }
-        Ok((start, candidates))
-    }
-}
-
-impl Highlighter for SuggestionManager {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+    pub fn highlight(&self, line: &str) -> String {
         let mut colored = String::new();
         
         let c_cmd = "\x1b[96m"; // Light cyan
@@ -358,21 +307,31 @@ impl Highlighter for SuggestionManager {
             // check keywords
             let is_kw = lw == ":" || lw == "to" || lw == "from" || lw == "append" || lw == "read" || lw == "merge" || lw == "err" || lw == "doc" || lw == "then" || lw == "while" || lw == "job" || lw == "if" || lw == "else" || lw == "fn" || lw == "and" || lw == "or";
             
+            let exists = std::path::Path::new(w).exists();
+            let underline_on = if exists { "\x1b[4m" } else { "" };
+            let underline_off = if exists { "\x1b[24m" } else { "" };
+            
             if is_kw {
                 out.push_str(c_log);
+                out.push_str(underline_on);
                 out.push_str(w);
+                out.push_str(underline_off);
                 out.push_str(reset);
                 if lw == ":" || lw == "then" || lw == "else" || lw == "while" || lw == "job" || lw == "fn" {
                     *first = true; // Next word is a command
                 }
             } else if *first {
                 out.push_str(c_cmd);
+                out.push_str(underline_on);
                 out.push_str(w);
+                out.push_str(underline_off);
                 out.push_str(reset);
                 *first = false;
             } else {
                 out.push_str(c_arg);
+                out.push_str(underline_on);
                 out.push_str(w);
+                out.push_str(underline_off);
                 out.push_str(reset);
             }
             word.clear();
@@ -417,43 +376,6 @@ impl Highlighter for SuggestionManager {
             colored.push_str(reset);
         }
 
-        std::borrow::Cow::Owned(colored)
-    }
-
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-        &'s self,
-        prompt: &'p str,
-        default: bool,
-    ) -> std::borrow::Cow<'b, str> {
-        if default {
-            return std::borrow::Cow::Borrowed(prompt);
-        }
-        
-        let mut result = String::with_capacity(prompt.len() + 40);
-        let mut in_ansi = false;
-        for c in prompt.chars() {
-            if c == '\x1b' {
-                result.push('\x01');
-                in_ansi = true;
-            }
-            result.push(c);
-            if in_ansi && c == 'm' {
-                result.push('\x02');
-                in_ansi = false;
-            }
-        }
-        std::borrow::Cow::Owned(result)
-    }
-
-    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
-        std::borrow::Cow::Owned(format!("\x1b[90m{}\x1b[0m", hint))
+        colored
     }
 }
-
-impl Validator for SuggestionManager {
-    fn validate(&self, _ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        Ok(ValidationResult::Valid(None))
-    }
-}
-
-impl Helper for SuggestionManager {}
