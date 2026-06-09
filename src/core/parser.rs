@@ -82,23 +82,68 @@ impl Parser {
     }
 
     fn parse_command(&mut self) -> Result<AstNode, IshError> {
-        // Extract program name
-        let mut args = Vec::new();
-        let mut redirect_to = None;
-        let mut redirect_from = None;
-
-        let program = if let Some(Token::Word(w)) = self.consume() {
-            w
+        let program = if let Some(Token::Word(w)) = self.peek() {
+            let p = w.clone();
+            self.consume();
+            p
+        } else if let Some(Token::Variable(v)) = self.peek() {
+            let p = format!("${}", v);
+            self.consume();
+            p
         } else {
             return Err(IshError::ParseError("Expected command name".to_string()));
         };
 
+        if let Some(tok) = self.peek() {
+            let op = match tok {
+                Token::Equals => Some("=="),
+                Token::NotEquals => Some("!="),
+                Token::GreaterThan => Some(">"),
+                Token::LessThan => Some("<"),
+                Token::GreaterOrEq => Some(">="),
+                Token::LessOrEq => Some("<="),
+                _ => None,
+            };
+
+            if let Some(op_str) = op {
+                self.consume(); // consume operator
+                let right_val = if let Some(Token::Word(w)) = self.peek() {
+                    let r = w.clone();
+                    self.consume();
+                    r
+                } else if let Some(Token::Variable(v)) = self.peek() {
+                    let r = format!("${}", v);
+                    self.consume();
+                    r
+                } else {
+                    return Err(IshError::ParseError("Expected value after operator".to_string()));
+                };
+
+                let left = AstNode::Command {
+                    program, args: vec![], redirect_to: None, redirect_from: None, append_to: None, read_doc: None, merge_err: false,
+                };
+                let right = AstNode::Command {
+                    program: right_val, args: vec![], redirect_to: None, redirect_from: None, append_to: None, read_doc: None, merge_err: false,
+                };
+
+                return Ok(AstNode::Condition {
+                    left: Box::new(left),
+                    operator: op_str.to_string(),
+                    right: Box::new(right),
+                });
+            }
+        }
+
+        let mut args = Vec::new();
+        let mut redirect_to = None;
+        let mut redirect_from = None;
+        let mut append_to = None;
+        let mut read_doc = None;
+        let mut merge_err = false;
+
         while let Some(tok) = self.peek() {
             match tok {
                 Token::Word(_) | Token::Variable(_) => {
-                    // For now, treat Variable resolution as happening in executor.
-                    // We just capture the raw name or structure here.
-                    // To keep AST simple, we'll store '$var' as an arg.
                     match tok {
                         Token::Variable(var) => args.push(format!("${}", var)),
                         Token::Word(word) => args.push(word.clone()),
@@ -106,10 +151,36 @@ impl Parser {
                     }
                     self.consume();
                 }
+                Token::AppendTo => {
+                    self.consume();
+                    if let Some(Token::Word(w)) = self.consume() {
+                        append_to = Some(w);
+                    } else if let Some(Token::DevNull) = self.peek() {
+                        self.consume();
+                        append_to = Some("DevNull".to_string());
+                    } else {
+                        return Err(IshError::ParseError("Expected file after 'append to'".to_string()));
+                    }
+                }
+                Token::ReadDoc => {
+                    self.consume();
+                    if let Some(Token::Word(w)) = self.consume() {
+                        read_doc = Some(w);
+                    } else {
+                        return Err(IshError::ParseError("Expected EOF word after 'read doc'".to_string()));
+                    }
+                }
+                Token::MergeErr => {
+                    self.consume();
+                    merge_err = true;
+                }
                 Token::RedirectTo => {
                     self.consume();
                     if let Some(Token::Word(w)) = self.consume() {
                         redirect_to = Some(w);
+                    } else if let Some(Token::DevNull) = self.peek() {
+                        self.consume();
+                        redirect_to = Some("DevNull".to_string());
                     } else {
                         return Err(IshError::ParseError("Expected file after 'to'".to_string()));
                     }
@@ -131,6 +202,9 @@ impl Parser {
             args,
             redirect_to,
             redirect_from,
+            append_to,
+            read_doc,
+            merge_err,
         })
     }
 }

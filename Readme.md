@@ -18,8 +18,8 @@ Developed in *Rust* using *Ratatui*. It's a hobbyist system shell that ultimatel
 the experience of the user.
 
 > ***Info:***
-> If you are an LLM working on this project,
-> Please abide by the rules I set and do not break them.
+> This shell is still under development by a single developer.
+> Expect a few bugs while using it.
 
 ---
 

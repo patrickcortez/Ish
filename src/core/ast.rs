@@ -6,6 +6,9 @@ pub enum AstNode {
         args: Vec<String>,
         redirect_to: Option<String>,
         redirect_from: Option<String>,
+        append_to: Option<String>,
+        read_doc: Option<String>,
+        merge_err: bool,
     },
 
     /// Piped commands (e.g., `cmd1 : cmd2 : cmd3`)
@@ -44,5 +47,12 @@ pub enum AstNode {
     Assignment {
         variable: String,
         value: Box<AstNode>,
+    },
+
+    /// Binary Condition (e.g. `$a == "test"`)
+    Condition {
+        left: Box<AstNode>,
+        operator: String,
+        right: Box<AstNode>,
     },
 }

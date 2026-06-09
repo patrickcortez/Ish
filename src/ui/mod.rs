@@ -187,7 +187,7 @@ impl App {
                                                 if let Err(e) = linter.lint(&ast) {
                                                     self.output.append(format!("Lint Error: {}", e));
                                                 } else {
-                                                    let mut executor = Executor::new();
+                                                    let mut executor = Executor::new(vec![]);
                                                     match executor.execute(&ast, &mut self.jobs) {
                                                         Ok((_, out)) => {
                                                             if !out.trim().is_empty() {

@@ -5,11 +5,32 @@ use std::fs::File;
 use std::io::{Read, Write};
 use crate::managers::job_controller::JobController;
 
-pub struct Executor {}
+pub struct Executor {
+    pub script_args: Vec<String>,
+    pub last_exit_code: i32,
+}
 
 impl Executor {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(script_args: Vec<String>) -> Self {
+        Self { script_args, last_exit_code: 0 }
+    }
+
+    fn resolve_var(&self, s: &str) -> String {
+        if s == "$LAST" {
+            self.last_exit_code.to_string()
+        } else if s.starts_with('$') {
+            if let Ok(idx) = s[1..].parse::<usize>() {
+                if idx > 0 && idx <= self.script_args.len() {
+                    self.script_args[idx - 1].clone()
+                } else {
+                    String::new()
+                }
+            } else {
+                s.to_string() // unresolved or env var
+            }
+        } else {
+            s.to_string()
+        }
     }
 
     pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<(bool, String), IshError> {
@@ -18,35 +39,59 @@ impl Executor {
 
     fn execute_node_with_input(&mut self, node: &AstNode, input: &str, jobs: &mut JobController) -> Result<(bool, String), IshError> {
         match node {
-            AstNode::Command { program, args, redirect_to, redirect_from } => {
+            AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
+                let resolved_program = self.resolve_var(program);
+                let mut resolved_args = Vec::new();
+                for arg in args {
+                    resolved_args.push(self.resolve_var(arg));
+                }
+
                 let mut cmd = if cfg!(target_os = "windows") {
                     let mut c = Command::new("powershell");
                     c.arg("-NoProfile").arg("-Command");
                     
-                    let mut full_cmd = program.clone();
-                    for arg in args {
+                    let mut full_cmd = resolved_program.clone();
+                    for arg in &resolved_args {
                         full_cmd.push(' ');
                         full_cmd.push_str(arg);
                     }
                     c.arg(full_cmd);
                     c
                 } else {
-                    let mut c = Command::new(program);
-                    c.args(args);
+                    let mut c = Command::new(&resolved_program);
+                    c.args(&resolved_args);
                     c
                 };
 
-                cmd.stdout(Stdio::piped());
-                cmd.stderr(Stdio::piped());
-
                 if let Some(path) = redirect_to {
-                    let file = File::create(path)?;
-                    cmd.stdout(Stdio::from(file));
+                    if path == "DevNull" {
+                        cmd.stdout(Stdio::null());
+                    } else {
+                        let file = File::create(path)?;
+                        cmd.stdout(Stdio::from(file));
+                    }
+                } else if let Some(path) = append_to {
+                    if path == "DevNull" {
+                        cmd.stdout(Stdio::null());
+                    } else {
+                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                        cmd.stdout(Stdio::from(file));
+                    }
+                } else {
+                    cmd.stdout(Stdio::piped());
                 }
                 
+                cmd.stderr(Stdio::piped());
+
                 if let Some(path) = redirect_from {
-                    let file = File::open(path)?;
-                    cmd.stdin(Stdio::from(file));
+                    if path == "DevNull" {
+                        cmd.stdin(Stdio::null());
+                    } else {
+                        let file = File::open(path)?;
+                        cmd.stdin(Stdio::from(file));
+                    }
+                } else if let Some(_) = read_doc {
+                    cmd.stdin(Stdio::piped());
                 } else if !input.is_empty() {
                     cmd.stdin(Stdio::piped());
                 } else {
@@ -55,20 +100,38 @@ impl Executor {
 
                 let mut child = cmd.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
 
-                if !input.is_empty() {
+                if let Some(_) = read_doc {
+                    if !input.is_empty() {
+                        if let Some(mut stdin) = child.stdin.take() {
+                            let _ = stdin.write_all(input.as_bytes());
+                        }
+                    }
+                } else if !input.is_empty() {
                     if let Some(mut stdin) = child.stdin.take() {
                         let _ = stdin.write_all(input.as_bytes());
                     }
                 }
 
                 let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
 
                 let mut output = String::new();
                 if let Some(mut stdout) = child.stdout.take() {
                     let _ = stdout.read_to_string(&mut output);
                 }
-                if let Some(mut stderr) = child.stderr.take() {
-                    let _ = stderr.read_to_string(&mut output);
+                
+                if *merge_err {
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let _ = stderr.read_to_string(&mut output);
+                    }
+                } else {
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let mut err_out = String::new();
+                        let _ = stderr.read_to_string(&mut err_out);
+                        if !err_out.is_empty() {
+                            output.push_str(&err_out);
+                        }
+                    }
                 }
 
                 Ok((status.success(), output))
@@ -117,10 +180,10 @@ impl Executor {
                         let mut full_ps_cmd = String::new();
                         for (i, node) in nodes.iter().enumerate() {
                             if let AstNode::Command { program, args, .. } = node {
-                                full_ps_cmd.push_str(program);
+                                full_ps_cmd.push_str(&self.resolve_var(program));
                                 for arg in args {
                                     full_ps_cmd.push(' ');
-                                    full_ps_cmd.push_str(arg);
+                                    full_ps_cmd.push_str(&self.resolve_var(arg));
                                 }
                                 if i < nodes.len() - 1 {
                                     full_ps_cmd.push_str(" | ");
@@ -172,21 +235,26 @@ impl Executor {
             }
             AstNode::Background(inner) => {
                 // If the inner is a command, we spawn it without waiting.
-                if let AstNode::Command { program, args, redirect_to, redirect_from } = &**inner {
+                if let AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc: _, merge_err: _ } = &**inner {
+                    let resolved_program = self.resolve_var(program);
+                    let mut resolved_args = Vec::new();
+                    for arg in args {
+                        resolved_args.push(self.resolve_var(arg));
+                    }
                     let mut cmd = if cfg!(target_os = "windows") {
                         let mut c = Command::new("powershell");
                         c.arg("-NoProfile").arg("-Command");
                         
-                        let mut full_cmd = program.clone();
-                        for arg in args {
+                        let mut full_cmd = resolved_program.clone();
+                        for arg in &resolved_args {
                             full_cmd.push(' ');
                             full_cmd.push_str(arg);
                         }
                         c.arg(full_cmd);
                         c
                     } else {
-                        let mut c = Command::new(program);
-                        c.args(args);
+                        let mut c = Command::new(&resolved_program);
+                        c.args(&resolved_args);
                         c
                     };
 
@@ -194,12 +262,27 @@ impl Executor {
                     cmd.stderr(Stdio::piped());
 
                     if let Some(path) = redirect_to {
-                        let file = File::create(path)?;
-                        cmd.stdout(Stdio::from(file));
+                        if path == "DevNull" {
+                            cmd.stdout(Stdio::null());
+                        } else {
+                            let file = File::create(path)?;
+                            cmd.stdout(Stdio::from(file));
+                        }
+                    } else if let Some(path) = append_to {
+                        if path == "DevNull" {
+                            cmd.stdout(Stdio::null());
+                        } else {
+                            let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                            cmd.stdout(Stdio::from(file));
+                        }
                     }
                     if let Some(path) = redirect_from {
-                        let file = File::open(path)?;
-                        cmd.stdin(Stdio::from(file));
+                        if path == "DevNull" {
+                            cmd.stdin(Stdio::null());
+                        } else {
+                            let file = File::open(path)?;
+                            cmd.stdin(Stdio::from(file));
+                        }
                     }
 
                     match cmd.spawn() {
@@ -212,6 +295,36 @@ impl Executor {
                 } else {
                     Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
                 }
+            }
+            AstNode::Condition { left, operator, right } => {
+                let (_, mut left_val) = self.execute_node_with_input(left, "", jobs)?;
+                let (_, mut right_val) = self.execute_node_with_input(right, "", jobs)?;
+                left_val = left_val.trim().to_string();
+                right_val = right_val.trim().to_string();
+
+                let is_true = if let (Ok(l), Ok(r)) = (left_val.parse::<f64>(), right_val.parse::<f64>()) {
+                    match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        ">" => l > r,
+                        "<" => l < r,
+                        ">=" => l >= r,
+                        "<=" => l <= r,
+                        _ => false,
+                    }
+                } else {
+                    match operator.as_str() {
+                        "==" => left_val == right_val,
+                        "!=" => left_val != right_val,
+                        ">" => left_val > right_val,
+                        "<" => left_val < right_val,
+                        ">=" => left_val >= right_val,
+                        "<=" => left_val <= right_val,
+                        _ => false,
+                    }
+                };
+
+                Ok((is_true, String::new()))
             }
             _ => Ok((true, String::new())),
         }

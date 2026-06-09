@@ -14,7 +14,7 @@ impl Linter {
 
     fn check_node(&self, node: &AstNode) -> Result<(), IshError> {
         match node {
-            AstNode::Command { program, args: _, redirect_to, redirect_from } => {
+            AstNode::Command { program, args: _, redirect_to, redirect_from, .. } => {
                 if program.is_empty() {
                     return Err(IshError::ParseError("Empty command detected".to_string()));
                 }
@@ -39,6 +39,10 @@ impl Linter {
             | AstNode::AndThen(left, right)
             | AstNode::OrElse(left, right)
             | AstNode::Parallel(left, right) => {
+                self.check_node(left)?;
+                self.check_node(right)?;
+            }
+            AstNode::Condition { left, right, .. } => {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }

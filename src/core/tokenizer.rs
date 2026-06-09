@@ -7,11 +7,23 @@ pub enum Token {
     Pipe,           // :
     RedirectTo,     // to
     RedirectFrom,   // from
+    AppendTo,       // append to
+    ReadDoc,        // read doc
+    MergeErr,       // merge err
+    DevNull,        // DevNull
     Then,           // then
     WhileAsync,     // while
     AndThen,        // and then
     OrElse,         // or else
     Job,            // job
+
+    // Operators
+    Equals,         // ==
+    NotEquals,      // !=
+    GreaterThan,    // >
+    LessThan,       // <
+    GreaterOrEq,    // >=
+    LessOrEq,       // <=
 
     // Scripting keywords
     If,
@@ -78,8 +90,40 @@ impl Tokenizer {
                     self.position += 1;
                 }
                 '=' => {
-                    tokens.push(Token::Assign);
                     self.position += 1;
+                    if self.position < self.input.len() && self.input[self.position] == '=' {
+                        self.position += 1;
+                        tokens.push(Token::Equals);
+                    } else {
+                        tokens.push(Token::Assign);
+                    }
+                }
+                '!' => {
+                    self.position += 1;
+                    if self.position < self.input.len() && self.input[self.position] == '=' {
+                        self.position += 1;
+                        tokens.push(Token::NotEquals);
+                    } else {
+                        tokens.push(Token::Word("!".to_string()));
+                    }
+                }
+                '>' => {
+                    self.position += 1;
+                    if self.position < self.input.len() && self.input[self.position] == '=' {
+                        self.position += 1;
+                        tokens.push(Token::GreaterOrEq);
+                    } else {
+                        tokens.push(Token::GreaterThan);
+                    }
+                }
+                '<' => {
+                    self.position += 1;
+                    if self.position < self.input.len() && self.input[self.position] == '=' {
+                        self.position += 1;
+                        tokens.push(Token::LessOrEq);
+                    } else {
+                        tokens.push(Token::LessThan);
+                    }
                 }
                 ',' => {
                     tokens.push(Token::Comma);
@@ -121,11 +165,39 @@ impl Tokenizer {
                         } else {
                             tokens.push(Token::Word(word));
                         }
+                    } else if word == "append" {
+                        self.skip_whitespace();
+                        let next_word = self.peek_word();
+                        if next_word == "to" {
+                            self.read_word();
+                            tokens.push(Token::AppendTo);
+                        } else {
+                            tokens.push(Token::Word(word));
+                        }
+                    } else if word == "read" {
+                        self.skip_whitespace();
+                        let next_word = self.peek_word();
+                        if next_word == "doc" {
+                            self.read_word();
+                            tokens.push(Token::ReadDoc);
+                        } else {
+                            tokens.push(Token::Word(word));
+                        }
+                    } else if word == "merge" {
+                        self.skip_whitespace();
+                        let next_word = self.peek_word();
+                        if next_word == "err" {
+                            self.read_word();
+                            tokens.push(Token::MergeErr);
+                        } else {
+                            tokens.push(Token::Word(word));
+                        }
                     } else {
                         // Check single keywords
                         match word.as_str() {
                             "to" => tokens.push(Token::RedirectTo),
                             "from" => tokens.push(Token::RedirectFrom),
+                            "DevNull" => tokens.push(Token::DevNull),
                             "then" => tokens.push(Token::Then),
                             "while" => tokens.push(Token::WhileAsync), // Parser determines if it's async operator or while loop
                             "job" => tokens.push(Token::Job),
@@ -155,7 +227,7 @@ impl Tokenizer {
         let mut word = String::new();
         while self.position < self.input.len() {
             let ch = self.input[self.position];
-            if ch.is_whitespace() || "{}()=,:\"'$".contains(ch) {
+            if ch.is_whitespace() || "{}()=,:\"'$!<>".contains(ch) {
                 break;
             }
             word.push(ch);
