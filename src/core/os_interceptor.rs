@@ -1,9 +1,5 @@
-use crate::core::ast::AstNode;
-use crate::error::IshError;
 use std::env::consts::OS;
 use std::process::Command;
-use std::io::Write;
-use std::fs::File;
 
 pub fn translate_and_execute(program: &str, args: &[String]) -> Result<Option<String>, String> {
     if OS == "windows" {

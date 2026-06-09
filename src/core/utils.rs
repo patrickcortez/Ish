@@ -202,6 +202,32 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                 Err(e) => Err(format!("expr error: {}", e)),
             }
         }
+        "help" => {
+            let help_text = "\
+Ish Built-in Commands:
+  help                    - Show this help message
+  change <dir>            - Change the current directory (cd)
+  quit [code]             - Exit the shell (exit)
+  declare [var=val]       - Set or display environment variables (export)
+  out <text>              - Print text to standard output (echo)
+  cwd                     - Print current working directory (pwd)
+  show [dir]              - List directory contents (ls)
+  read <file>             - Read and output file contents (cat)
+  create <-d|-f> <name>   - Create a directory (-d) or file (-f) (mkdir/touch)
+  irm [-r] <path>         - Remove file or directory (rm)
+  input [prompt]          - Read a line of input into $INPUT variable
+  inputkey [prompt]       - Read a single keypress into $INPUT variable
+  expr <expression>       - Evaluate a mathematical expression
+  jobs                    - List all background jobs
+  fg <job_id>             - Bring a background job to the foreground
+  kill <job_id>           - Kill a background job
+  grep <pattern> <file>   - Search file for pattern (intercepted via OS)
+  curl/wget <url>         - Fetch URL contents (intercepted via OS)
+  find <pattern>          - Find files (intercepted via OS)
+  clear/cls               - Clear the screen (intercepted via OS)
+";
+            Ok(Some(help_text.to_string()))
+        }
         _ => Ok(None),
     }
 }
