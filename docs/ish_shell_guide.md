@@ -26,11 +26,38 @@ Ish handles normal OS commands natively, but also provides internal built-ins pr
 - `:Editor <editor_name>`
   Sets the default text editor for automatically opening files when navigating the terminal.
 
-- `cd <path>`
+- `change <path>`
   Changes the current working directory.
 
-- `exit` or `quit`
+- `quit`
   Gracefully terminates the shell and flushes your history to disk.
+
+- `declare [var=value]`
+  Sets or views environment variables.
+
+- `out <text>`
+  Prints text to standard output.
+
+- `cwd`
+  Prints the current working directory.
+
+- `show [path]`
+  Lists directory contents.
+
+- `read <file>`
+  Reads and prints file contents.
+
+- `create <-f|-d> <name>`
+  Creates a file (`-f`) or a directory (`-d`). Defaults to file creation if no flag is provided.
+
+- `input [prompt]`
+  Reads a full line of text from standard input.
+
+- `inputkey [prompt]`
+  Reads exactly one keystroke from standard input in raw mode.
+
+- `expr <math_expression>`
+  Evaluates mathematical expressions.
 
 ## Native PowerShell Integration (Windows)
 When running Ish on Windows, the shell seamlessly bridges into the OS.

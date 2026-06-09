@@ -58,6 +58,20 @@ Instead of using `&` to run nodes in parallel, Ish uses the `while` operator to 
 > long_running_task while short_task
 ```
 
+## Built-In Commands
+Ish ships with cross-platform native commands evaluated internally without launching external processes:
+- `change <path>`: Change the current working directory.
+- `quit`: Exit the shell script / REPL.
+- `declare [var=val]`: Export or view environment variables.
+- `out <text>`: Print to standard output.
+- `cwd`: Print current working directory.
+- `show [path]`: List directory contents.
+- `read <file>`: Read file contents.
+- `create <-f|-d> <name>`: Create file (`-f`) or directory (`-d`).
+- `input [prompt]`: Wait for standard input string.
+- `inputkey [prompt]`: Intercept exactly one keystroke natively.
+- `expr <math>`: Evaluate math equations inline.
+
 ## Scripting Elements
 Within a `.ish` script, you can leverage advanced programming capabilities natively evaluated by the Ish AST interpreter.
 
