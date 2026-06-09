@@ -224,7 +224,6 @@ impl Executor {
                         c.stderr(Stdio::piped());
 
                         // Input redirection (from first node)
-                        let mut has_read_doc = false;
                         if let Some(AstNode::Command { redirect_from, read_doc, .. }) = nodes.first() {
                             if let Some(path) = redirect_from {
                                 if path == "DevNull" {
@@ -234,7 +233,6 @@ impl Executor {
                                     c.stdin(Stdio::from(file));
                                 }
                             } else if read_doc.is_some() {
-                                has_read_doc = true;
                                 c.stdin(Stdio::piped());
                             } else if !input.is_empty() {
                                 c.stdin(Stdio::piped());
