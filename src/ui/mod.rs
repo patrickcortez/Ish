@@ -237,8 +237,11 @@ impl App {
                                                 if let Err(e) = linter.lint(&ast) {
                                                     self.output.append(format!("Lint Error: {}", e));
                                                 } else {
+                                                    let mut jobs = std::mem::replace(&mut self.jobs, JobController::new());
                                                     let mut executor = Executor::new(vec![]);
-                                                    match executor.execute(&ast, &mut self.jobs) {
+                                                    match executor.execute(&ast, &mut jobs, &mut |child, merge_err| {
+                                                        self.pump_io(child, terminal, config, merge_err)
+                                                    }) {
                                                         Ok((_, out)) => {
                                                             if !out.trim().is_empty() {
                                                                 for line in out.lines() {
@@ -250,6 +253,7 @@ impl App {
                                                             self.output.append(format!("Execution Error: {}", e));
                                                         }
                                                     }
+                                                    self.jobs = jobs;
                                                 }
                                             }
                                             Err(e) => self.output.append(format!("Parse Error: {}", e)),
@@ -302,5 +306,173 @@ impl App {
         }
 
         self.input.draw(f, chunks[2], _config);
+    }
+
+    fn pump_io(
+        &mut self,
+        child: &mut std::process::Child,
+        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+        config: &ConfigManager,
+        merge_err: bool,
+    ) -> Result<String, crate::error::IshError> {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::io::{Read, Write};
+
+        let (tx, rx) = mpsc::channel();
+        
+        if let Some(mut stdout) = child.stdout.take() {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut buf = [0; 1024];
+                while let Ok(n) = stdout.read(&mut buf) {
+                    if n == 0 { break; }
+                    let _ = tx.send((false, buf[..n].to_vec()));
+                }
+            });
+        }
+        
+        if let Some(mut stderr) = child.stderr.take() {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut buf = [0; 1024];
+                while let Ok(n) = stderr.read(&mut buf) {
+                    if n == 0 { break; }
+                    let _ = tx.send((true, buf[..n].to_vec()));
+                }
+            });
+        }
+
+        let mut alt_screen_active = false;
+        let mut full_output = String::new();
+        let mut full_err = String::new();
+        let mut stdin_thread_spawned = false;
+
+        loop {
+            while let Ok((is_err, bytes)) = rx.try_recv() {
+                let chunk = String::from_utf8_lossy(&bytes);
+                
+                if !is_err {
+                    if chunk.contains("\x1b[?1049h") || chunk.contains("\x1b[?1047h") || chunk.contains("\x1b[?47h") {
+                        if !alt_screen_active {
+                            alt_screen_active = true;
+                            let _ = disable_raw_mode();
+                            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+                        }
+                    }
+                    
+                    if alt_screen_active {
+                        let _ = io::stdout().write_all(&bytes);
+                        let _ = io::stdout().flush();
+                    } else {
+                        full_output.push_str(&chunk);
+                        
+                        // Parse lines for UI rendering
+                        let mut parts: Vec<&str> = chunk.split('\n').collect();
+                        if parts.len() > 1 {
+                            let first = parts.remove(0);
+                            let current_partial = self.output.partial_line.take().unwrap_or_default();
+                            self.output.append(format!("{}{}", current_partial, first));
+                            
+                            let last = parts.pop().unwrap();
+                            for p in parts {
+                                self.output.append(p.to_string());
+                            }
+                            self.output.partial_line = Some(last.to_string());
+                        } else {
+                            let current_partial = self.output.partial_line.take().unwrap_or_default();
+                            self.output.partial_line = Some(format!("{}{}", current_partial, parts[0]));
+                        }
+                    }
+                } else {
+                    if alt_screen_active {
+                        let _ = io::stderr().write_all(&bytes);
+                        let _ = io::stderr().flush();
+                    } else {
+                        full_err.push_str(&chunk);
+                    }
+                }
+            }
+
+            if alt_screen_active {
+                if !stdin_thread_spawned {
+                    stdin_thread_spawned = true;
+                    if let Some(mut child_stdin) = child.stdin.take() {
+                        thread::spawn(move || {
+                            let mut raw_stdin = std::io::stdin();
+                            let mut buf = [0; 128];
+                            while let Ok(n) = raw_stdin.read(&mut buf) {
+                                if n == 0 { break; }
+                                if child_stdin.write_all(&buf[..n]).is_err() { break; }
+                                let _ = child_stdin.flush();
+                            }
+                        });
+                    }
+                }
+            } else {
+                let _ = terminal.draw(|f| self.draw(f, config));
+                
+                if event::poll(std::time::Duration::from_millis(20)).unwrap_or(false) {
+                    if let Ok(Event::Key(key)) = event::read() {
+                        if key.code == KeyCode::Enter {
+                            let line = format!("{}\n", self.input.input);
+                            if let Some(stdin) = child.stdin.as_mut() {
+                                let _ = stdin.write_all(line.as_bytes());
+                                let _ = stdin.flush();
+                            }
+                            self.output.append(self.input.input.clone());
+                            self.input.input.clear();
+                            self.input.cursor_pos = 0;
+                        } else if key.code == KeyCode::Char('c') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                            let _ = child.kill();
+                        } else {
+                            self.input.handle_key(key);
+                        }
+                    }
+                }
+            }
+
+            if let Ok(Some(_)) = child.try_wait() {
+                // Drain
+                while let Ok((is_err, bytes)) = rx.try_recv() {
+                    let chunk = String::from_utf8_lossy(&bytes);
+                    if !is_err {
+                        if alt_screen_active {
+                            let _ = io::stdout().write_all(&bytes);
+                            let _ = io::stdout().flush();
+                        } else {
+                            full_output.push_str(&chunk);
+                        }
+                    } else {
+                        if alt_screen_active {
+                            let _ = io::stderr().write_all(&bytes);
+                            let _ = io::stderr().flush();
+                        } else {
+                            full_err.push_str(&chunk);
+                        }
+                    }
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        self.output.partial_line = None;
+
+        if alt_screen_active {
+            let _ = enable_raw_mode();
+            let _ = execute!(io::stdout(), EnterAlternateScreen);
+            let _ = terminal.clear();
+            return Ok(String::new());
+        }
+
+        if merge_err {
+            full_output.push_str(&full_err);
+        } else if !full_err.is_empty() {
+            full_output.push_str(&full_err);
+        }
+
+        // Return empty so the caller (executor loop) doesn't append it again
+        Ok(String::new())
     }
 }

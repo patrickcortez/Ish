@@ -9,6 +9,7 @@ use crate::managers::config::ConfigManager;
 
 pub struct OutputBox {
     pub history: Vec<String>,
+    pub partial_line: Option<String>,
     pub scroll: u16,
     pub auto_scroll: bool,
 }
@@ -20,6 +21,7 @@ impl OutputBox {
                 "Welcome to Ish (Intelli-Shell)".to_string(),
                 "Type a command...".to_string(),
             ],
+            partial_line: None,
             scroll: 0,
             auto_scroll: true,
         }
@@ -27,6 +29,7 @@ impl OutputBox {
 
     pub fn clear(&mut self) {
         self.history.clear();
+        self.partial_line = None;
         self.scroll = 0;
         self.auto_scroll = true;
     }
@@ -49,7 +52,11 @@ impl OutputBox {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, area: Rect, config: &ConfigManager) {
-        let text: Vec<Line> = self.history.iter().map(|s| Line::from(s.clone())).collect();
+        let mut text: Vec<Line> = self.history.iter().map(|s| Line::from(s.clone())).collect();
+        if let Some(partial) = &self.partial_line {
+            text.push(Line::from(partial.clone()));
+        }
+        
         let total_lines = text.len() as u16;
         let view_height = area.height.saturating_sub(2);
 

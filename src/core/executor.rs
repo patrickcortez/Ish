@@ -33,11 +33,15 @@ impl Executor {
         }
     }
 
-    pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<(bool, String), IshError> {
-        self.execute_node_with_input(ast, "", jobs)
+    pub fn execute<F>(&mut self, ast: &AstNode, jobs: &mut JobController, pump_callback: &mut F) -> Result<(bool, String), IshError> 
+    where F: FnMut(&mut std::process::Child, bool) -> Result<String, IshError>
+    {
+        self.execute_node_with_input(ast, "", jobs, pump_callback)
     }
 
-    fn execute_node_with_input(&mut self, node: &AstNode, input: &str, jobs: &mut JobController) -> Result<(bool, String), IshError> {
+    fn execute_node_with_input<F>(&mut self, node: &AstNode, input: &str, jobs: &mut JobController, pump_callback: &mut F) -> Result<(bool, String), IshError> 
+    where F: FnMut(&mut std::process::Child, bool) -> Result<String, IshError>
+    {
         match node {
             AstNode::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
                 let resolved_program = self.resolve_var(program);
@@ -95,7 +99,7 @@ impl Executor {
                 } else if !input.is_empty() {
                     cmd.stdin(Stdio::piped());
                 } else {
-                    cmd.stdin(Stdio::inherit());
+                    cmd.stdin(Stdio::piped());
                 }
 
                 let mut child = cmd.spawn().map_err(|e| IshError::ExecutionError(e.to_string()))?;
@@ -112,40 +116,23 @@ impl Executor {
                     }
                 }
 
+                let mut output = pump_callback(&mut child, *merge_err)?;
+
                 let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                 self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
-
-                let mut output = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut output);
-                }
-                
-                if *merge_err {
-                    if let Some(mut stderr) = child.stderr.take() {
-                        let _ = stderr.read_to_string(&mut output);
-                    }
-                } else {
-                    if let Some(mut stderr) = child.stderr.take() {
-                        let mut err_out = String::new();
-                        let _ = stderr.read_to_string(&mut err_out);
-                        if !err_out.is_empty() {
-                            output.push_str(&err_out);
-                        }
-                    }
-                }
 
                 Ok((status.success(), output))
             }
             AstNode::Sequential(left, right) => {
-                let (_s1, mut out1) = self.execute_node_with_input(left, input, jobs)?;
-                let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
+                let (_s1, mut out1) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
+                let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
                 out1.push_str(&out2);
                 Ok((s2, out1))
             }
             AstNode::AndThen(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input, jobs)?;
+                let (success, mut out) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
                 if success {
-                    let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
+                    let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
                     out.push_str(&out2);
                     Ok((s2, out))
                 } else {
@@ -153,9 +140,9 @@ impl Executor {
                 }
             }
             AstNode::OrElse(left, right) => {
-                let (success, mut out) = self.execute_node_with_input(left, input, jobs)?;
+                let (success, mut out) = self.execute_node_with_input(left, input, jobs, pump_callback)?;
                 if !success {
-                    let (s2, out2) = self.execute_node_with_input(right, "", jobs)?;
+                    let (s2, out2) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
                     out.push_str(&out2);
                     Ok((s2, out))
                 } else {
@@ -243,7 +230,7 @@ impl Executor {
                             if !input.is_empty() {
                                 c.stdin(Stdio::piped());
                             } else {
-                                c.stdin(Stdio::inherit());
+                                c.stdin(Stdio::piped());
                             }
                         }
 
@@ -255,27 +242,10 @@ impl Executor {
                             }
                         }
 
+                        let mut output = pump_callback(&mut child, merge_error)?;
+
                         let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                         self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
-                        
-                        let mut output = String::new();
-                        if let Some(mut stdout) = child.stdout.take() {
-                            let _ = stdout.read_to_string(&mut output);
-                        }
-                        
-                        if merge_error {
-                            if let Some(mut stderr) = child.stderr.take() {
-                                let _ = stderr.read_to_string(&mut output);
-                            }
-                        } else {
-                            if let Some(mut stderr) = child.stderr.take() {
-                                let mut err_out = String::new();
-                                let _ = stderr.read_to_string(&mut err_out);
-                                if !err_out.is_empty() {
-                                    output.push_str(&err_out);
-                                }
-                            }
-                        }
 
                         return Ok((status.success(), output));
                     }
@@ -285,7 +255,7 @@ impl Executor {
                 let mut last_success = true;
 
                 for node in nodes {
-                    let (success, out) = self.execute_node_with_input(node, &current_input, jobs)?;
+                    let (success, out) = self.execute_node_with_input(node, &current_input, jobs, pump_callback)?;
                     last_success = success;
                     current_input = out;
                 }
@@ -355,8 +325,8 @@ impl Executor {
                 }
             }
             AstNode::Condition { left, operator, right } => {
-                let (_, mut left_val) = self.execute_node_with_input(left, "", jobs)?;
-                let (_, mut right_val) = self.execute_node_with_input(right, "", jobs)?;
+                let (_, mut left_val) = self.execute_node_with_input(left, "", jobs, pump_callback)?;
+                let (_, mut right_val) = self.execute_node_with_input(right, "", jobs, pump_callback)?;
                 left_val = left_val.trim().to_string();
                 right_val = right_val.trim().to_string();
 
