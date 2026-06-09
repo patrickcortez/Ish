@@ -4,6 +4,8 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, Borders, Paragraph},
 };
+use std::str::FromStr;
+use crate::managers::config::ConfigManager;
 
 pub struct InputBox {
     pub input: String,
@@ -66,9 +68,10 @@ impl InputBox {
         }
     }
 
-    pub fn draw(&self, f: &mut ratatui::Frame, area: Rect) {
+    pub fn draw(&self, f: &mut ratatui::Frame, area: Rect, config: &ConfigManager) {
+        let color = Color::from_str(&config.current_config.input_color).unwrap_or(Color::Cyan);
         let input_block = Paragraph::new(format!("> {}", self.input))
-            .style(Style::default().fg(Color::Cyan))
+            .style(Style::default().fg(color))
             .block(Block::default().borders(Borders::ALL).title(" Input "));
         f.render_widget(input_block, area);
 

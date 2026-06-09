@@ -4,6 +4,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     text::Line,
 };
+use std::str::FromStr;
+use crate::managers::config::ConfigManager;
 
 pub struct OutputBox {
     pub history: Vec<String>,
@@ -46,7 +48,7 @@ impl OutputBox {
         self.auto_scroll = false;
     }
 
-    pub fn draw(&mut self, f: &mut ratatui::Frame, area: Rect) {
+    pub fn draw(&mut self, f: &mut ratatui::Frame, area: Rect, config: &ConfigManager) {
         let text: Vec<Line> = self.history.iter().map(|s| Line::from(s.clone())).collect();
         let total_lines = text.len() as u16;
         let view_height = area.height.saturating_sub(2);
@@ -64,8 +66,9 @@ impl OutputBox {
             " Output (SCROLLING) ".to_string()
         };
 
+        let color = Color::from_str(&config.current_config.output_color).unwrap_or(Color::White);
         let output_block = Paragraph::new(text)
-            .style(Style::default().fg(Color::White))
+            .style(Style::default().fg(color))
             .block(Block::default().borders(Borders::ALL).title(title))
             .scroll((self.scroll, 0));
         f.render_widget(output_block, area);

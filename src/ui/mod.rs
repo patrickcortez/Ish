@@ -142,12 +142,59 @@ impl App {
                                     }
                                     continue;
                                 } else if cmd_trim.starts_with(":Color ") {
-                                    let color = cmd_trim[7..].trim();
-                                    self.output.append(format!("Color configuration is a WIP: {}", color));
+                                    let args: Vec<&str> = cmd_trim[7..].trim().split_whitespace().collect();
+                                    if args.len() == 2 {
+                                        let target = args[0];
+                                        let color_str = args[1];
+                                        
+                                        // Validate color before saving
+                                        use ratatui::style::Color;
+                                        use std::str::FromStr;
+                                        
+                                        if Color::from_str(color_str).is_ok() {
+                                            match target.to_lowercase().as_str() {
+                                                "--inputbox" => self.config.current_config.input_color = color_str.to_string(),
+                                                "--output" => self.config.current_config.output_color = color_str.to_string(),
+                                                "--banner" => self.config.current_config.banner_color = color_str.to_string(),
+                                                _ => {
+                                                    self.output.append(format!("Unknown color target: {}. Use --inputbox, --output, or --banner.", target));
+                                                    continue;
+                                                }
+                                            }
+                                            if let Err(e) = self.config.save() {
+                                                self.output.append(format!("Failed to save config: {}", e));
+                                            } else {
+                                                self.output.append(format!("Color for {} set to {}", target, color_str));
+                                            }
+                                        } else {
+                                            self.output.append(format!("Invalid color: {}", color_str));
+                                        }
+                                    } else {
+                                        self.output.append("Usage: :Color <Target> <Color>".to_string());
+                                    }
                                     continue;
-                                } else if cmd_trim == ":Toggle" {
-                                    self.config.current_config.autocd = !self.config.current_config.autocd;
-                                    self.output.append(format!("Autocd set to: {}", self.config.current_config.autocd));
+                                } else if cmd_trim.starts_with(":Toggle ") {
+                                    let args: Vec<&str> = cmd_trim[8..].trim().split_whitespace().collect();
+                                    if args.len() == 2 {
+                                        let flag = args[0];
+                                        let value = args[1] == "true";
+                                        match flag.to_lowercase().as_str() {
+                                            "--autocd" => {
+                                                self.config.current_config.autocd = value;
+                                                self.output.append(format!("Autocd set to: {}", value));
+                                            }
+                                            "--suggestions" => {
+                                                self.config.current_config.suggestions = value;
+                                                self.output.append(format!("Suggestions set to: {}", value));
+                                            }
+                                            _ => {
+                                                self.output.append(format!("Unknown flag: {}. Use --autocd or --suggestions.", flag));
+                                            }
+                                        }
+                                        let _ = self.config.save();
+                                    } else {
+                                        self.output.append("Usage: :Toggle <Flag> <true/false>".to_string());
+                                    }
                                     continue;
                                 } else if cmd_trim.starts_with(":Editor ") {
                                     let editor = cmd_trim[8..].trim();
@@ -240,11 +287,11 @@ impl App {
             )
             .split(size);
 
-        self.banner.draw(f, chunks[0]);
-        self.output.draw(f, chunks[1]);
+        self.banner.draw(f, chunks[0], _config);
+        self.output.draw(f, chunks[1], _config);
         
         // Overlap suggestions box above the input box if active
-        if self.suggestions.is_active() {
+        if self.suggestions.is_active() && _config.current_config.suggestions {
             let suggest_rect = Rect {
                 x: chunks[2].x,
                 y: chunks[2].y.saturating_sub(6), // Display above input box
@@ -254,6 +301,6 @@ impl App {
             self.suggestions.draw(f, suggest_rect);
         }
 
-        self.input.draw(f, chunks[2]);
+        self.input.draw(f, chunks[2], _config);
     }
 }

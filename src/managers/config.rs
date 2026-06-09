@@ -7,7 +7,9 @@ pub struct Config {
     pub autocd: bool,
     pub suggestions: bool,
     pub editor: String,
-    // Add color config later based on needs
+    pub input_color: String,
+    pub output_color: String,
+    pub banner_color: String,
 }
 
 impl Default for Config {
@@ -16,6 +18,9 @@ impl Default for Config {
             autocd: true,
             suggestions: true,
             editor: String::from("vim"), // Default editor
+            input_color: String::from("LightBlue"),
+            output_color: String::from("White"),
+            banner_color: String::from("LightBlue"),
         }
     }
 }
@@ -52,6 +57,9 @@ impl ConfigManager {
                         "autocd" => self.current_config.autocd = value == "true",
                         "suggestions" => self.current_config.suggestions = value == "true",
                         "editor" => self.current_config.editor = value.to_string(),
+                        "input_color" => self.current_config.input_color = value.to_string(),
+                        "output_color" => self.current_config.output_color = value.to_string(),
+                        "banner_color" => self.current_config.banner_color = value.to_string(),
                         _ => {}
                     }
                 }
@@ -67,6 +75,9 @@ impl ConfigManager {
         content.push_str(&format!("autocd={}\n", self.current_config.autocd));
         content.push_str(&format!("suggestions={}\n", self.current_config.suggestions));
         content.push_str(&format!("editor={}\n", self.current_config.editor));
+        content.push_str(&format!("input_color={}\n", self.current_config.input_color));
+        content.push_str(&format!("output_color={}\n", self.current_config.output_color));
+        content.push_str(&format!("banner_color={}\n", self.current_config.banner_color));
         
         std::fs::write(&self.config_path, content)?;
         Ok(())
