@@ -1,0 +1,8 @@
+C:\Users\Cortez\Documents\Projects\Ish\scratch_coreutils\target\debug\deps\icu_calendar_data-af7305744712dbee.d: C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\lib.rs C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data/mod.rs C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_japanese_modern_v1.rs.data C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_week_v1.rs.data
+
+C:\Users\Cortez\Documents\Projects\Ish\scratch_coreutils\target\debug\deps\libicu_calendar_data-af7305744712dbee.rmeta: C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\lib.rs C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data/mod.rs C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_japanese_modern_v1.rs.data C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_week_v1.rs.data
+
+C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\lib.rs:
+C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data/mod.rs:
+C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_japanese_modern_v1.rs.data:
+C:\Users\Cortez\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_calendar_data-2.2.0\src\../data\calendar_week_v1.rs.data:

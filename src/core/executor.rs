@@ -183,7 +183,7 @@ impl Executor {
 
                 let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
 
-                let internal_result = match final_program.as_str() {
+                let mut internal_result = match final_program.as_str() {
                     "jobs" => Ok(Some(jobs.list_jobs())),
                     "fg" => {
                         if final_args.is_empty() {
@@ -211,6 +211,12 @@ impl Executor {
                     }
                     _ => crate::core::utils::execute_internal(&final_program, &final_args)
                 };
+
+                if let Ok(None) = internal_result {
+                    if let Ok(Some(translated)) = crate::core::os_interceptor::translate_and_execute(&final_program, &final_args) {
+                        internal_result = Ok(Some(translated));
+                    }
+                }
 
                 match internal_result {
                     Ok(Some(output)) => {
