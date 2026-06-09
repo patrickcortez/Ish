@@ -183,7 +183,36 @@ impl Executor {
 
                 let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
 
-                match crate::core::utils::execute_internal(&final_program, &final_args) {
+                let internal_result = match final_program.as_str() {
+                    "jobs" => Ok(Some(jobs.list_jobs())),
+                    "fg" => {
+                        if final_args.is_empty() {
+                            Err("fg error: expected job id".to_string())
+                        } else if let Ok(id) = final_args[0].parse::<u32>() {
+                            match jobs.wait_job(id) {
+                                Ok(msg) => Ok(Some(msg + "\n")),
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            Err("fg error: invalid job id".to_string())
+                        }
+                    }
+                    "kill" => {
+                        if final_args.is_empty() {
+                            Err("kill error: expected job id".to_string())
+                        } else if let Ok(id) = final_args[0].parse::<u32>() {
+                            match jobs.kill_job(id) {
+                                Ok(msg) => Ok(Some(msg + "\n")),
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            Err("kill error: invalid job id".to_string())
+                        }
+                    }
+                    _ => crate::core::utils::execute_internal(&final_program, &final_args)
+                };
+
+                match internal_result {
                     Ok(Some(output)) => {
                         self.last_exit_code = 0;
                         if let Some(path) = out_file {

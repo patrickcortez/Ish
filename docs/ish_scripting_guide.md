@@ -71,6 +71,9 @@ Ish ships with cross-platform native commands evaluated internally without launc
 - `input [prompt]`: Wait for standard input string.
 - `inputkey [prompt]`: Intercept exactly one keystroke natively.
 - `expr <math>`: Evaluate math equations inline.
+- `jobs`: List all active background jobs.
+- `fg <id>`: Bring a background job to the foreground and wait for it to complete.
+- `kill <id>`: Forcefully terminate a running background job.
 
 ## Scripting Elements
 Within a `.ish` script, you can leverage advanced programming capabilities natively evaluated by the Ish AST interpreter.
