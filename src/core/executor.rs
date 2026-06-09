@@ -2,7 +2,7 @@ use crate::core::ast::AstNode;
 use crate::error::IshError;
 use std::process::{Command, Stdio};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use crate::managers::job_controller::JobController;
 
 pub struct Executor {
@@ -116,7 +116,7 @@ impl Executor {
                     }
                 }
 
-                let mut output = pump_callback(&mut child, *merge_err)?;
+                let output = pump_callback(&mut child, *merge_err)?;
 
                 let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                 self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
@@ -242,7 +242,7 @@ impl Executor {
                             }
                         }
 
-                        let mut output = pump_callback(&mut child, merge_error)?;
+                        let output = pump_callback(&mut child, merge_error)?;
 
                         let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
                         self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
