@@ -4,7 +4,9 @@
 2. [Features](#features)
 3. [Strcuture](#structure)
 4. [Installation](#installation)
-5. [License](#license)
+ 4.1 [Uninstallation](#uninstall)
+5. [Documentations](#documentations)
+6. [License](#license)
 
 ---
 
@@ -115,8 +117,18 @@ Make sure you have the following:
 After acquiring the required packages. simply do `make install` then wait for it to successfully install.
 After installing you can simply run: `ish`.
 
+### Uninstall
+
+To uninstall **Ish** simply do `make uninstall`. This will remove **Ish** from your system.
+
+---
+
+## Documentations
+
+For more information about **Ish** and its features, see [docs](/docs/) folder.
+
 ---
 
 ## License
 
-**Ish** is under *GNU GPL v3.0 License*, for more information See [LICENSE](LICENSE).
+**Ish** is under *GNU GPL v3.0 License*, for more information see [LICENSE](LICENSE).
