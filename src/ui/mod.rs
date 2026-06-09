@@ -132,6 +132,9 @@ impl App {
                                 if cmd_trim == "exit" || cmd_trim == "quit" {
                                     self.should_quit = true;
                                     break;
+                                } else if cmd_trim == "clear" || cmd_trim == "cls" {
+                                    self.output.clear();
+                                    continue;
                                 } else if cmd_trim.starts_with("cd ") {
                                     let path = cmd_trim[3..].trim();
                                     if let Err(e) = std::env::set_current_dir(path) {

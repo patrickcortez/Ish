@@ -23,6 +23,12 @@ impl OutputBox {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.history.clear();
+        self.scroll = 0;
+        self.auto_scroll = true;
+    }
+
     pub fn append(&mut self, line: String) {
         for l in line.lines() {
             self.history.push(l.to_string());
