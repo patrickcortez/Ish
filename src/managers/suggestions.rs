@@ -79,10 +79,76 @@ impl SuggestionManager {
             return results;
         }
 
-        // 1. If it has a space, suggest files/directories from the last token
         let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-        if trimmed.ends_with(char::is_whitespace) || tokens.len() > 1 {
-            let last_token = if trimmed.ends_with(char::is_whitespace) {
+        let ends_with_space = trimmed.ends_with(char::is_whitespace);
+
+        // Built-in command contextual suggestions
+        if trimmed.starts_with(':') {
+            if tokens.len() == 1 && !ends_with_space {
+                let builtins = [":Color", ":Toggle", ":Editor"];
+                for b in builtins.iter() {
+                    if b.to_lowercase().starts_with(&tokens[0].to_lowercase()) {
+                        results.push(b.to_string());
+                    }
+                }
+                if !results.is_empty() { return results; }
+            } else if tokens[0].eq_ignore_ascii_case(":Color") {
+                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
+                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
+                    let targets = ["--inputbox", "--output", "--banner"];
+                    for t in targets.iter() {
+                        if t.to_lowercase().starts_with(&partial.to_lowercase()) {
+                            results.push(t.to_string());
+                        }
+                    }
+                    return results;
+                } else if (tokens.len() == 2 && ends_with_space) || (tokens.len() == 3 && !ends_with_space) {
+                    let partial = if tokens.len() == 3 { tokens[2] } else { "" };
+                    let colors = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "White", "Black", "Gray", "DarkGray", "LightRed", "LightGreen", "LightBlue", "LightCyan", "LightMagenta", "LightYellow"];
+                    for c in colors.iter() {
+                        if c.to_lowercase().starts_with(&partial.to_lowercase()) {
+                            results.push(c.to_string());
+                        }
+                    }
+                    return results;
+                }
+            } else if tokens[0].eq_ignore_ascii_case(":Toggle") {
+                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
+                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
+                    let flags = ["--autocd", "--suggestions"];
+                    for f in flags.iter() {
+                        if f.to_lowercase().starts_with(&partial.to_lowercase()) {
+                            results.push(f.to_string());
+                        }
+                    }
+                    return results;
+                } else if (tokens.len() == 2 && ends_with_space) || (tokens.len() == 3 && !ends_with_space) {
+                    let partial = if tokens.len() == 3 { tokens[2] } else { "" };
+                    let bools = ["true", "false"];
+                    for b in bools.iter() {
+                        if b.to_lowercase().starts_with(&partial.to_lowercase()) {
+                            results.push(b.to_string());
+                        }
+                    }
+                    return results;
+                }
+            } else if tokens[0].eq_ignore_ascii_case(":Editor") {
+                if (tokens.len() == 1 && ends_with_space) || (tokens.len() == 2 && !ends_with_space) {
+                    let partial = if tokens.len() == 2 { tokens[1] } else { "" };
+                    let editors = ["vim", "nano", "code", "nvim", "emacs"];
+                    for e in editors.iter() {
+                        if e.to_lowercase().starts_with(&partial.to_lowercase()) {
+                            results.push(e.to_string());
+                        }
+                    }
+                    if !results.is_empty() { return results; }
+                }
+            }
+        }
+
+        // 1. If it has a space, suggest files/directories from the last token
+        if ends_with_space || tokens.len() > 1 {
+            let last_token = if ends_with_space {
                 ""
             } else {
                 tokens.last().unwrap()
