@@ -3,3 +3,4 @@ pub mod ast;
 pub mod parser;
 pub mod linter;
 pub mod executor;
+pub mod utils;

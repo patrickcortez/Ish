@@ -1,5 +1,5 @@
-use crate::core::ast::AstNode;
-use crate::core::tokenizer::Token;
+use crate::core::ast::{AstNode, AstNodeKind};
+use crate::core::tokenizer::{Token, TokenKind};
 use crate::error::IshError;
 
 pub struct Parser {
@@ -30,34 +30,46 @@ impl Parser {
         }
     }
 
+    fn get_location(&self) -> (usize, usize) {
+        if let Some(tok) = self.peek() {
+            (tok.line, tok.column)
+        } else if self.tokens.len() > 0 {
+            let last = &self.tokens[self.tokens.len() - 1];
+            (last.line, last.column)
+        } else {
+            (1, 1)
+        }
+    }
+
     fn parse_logical(&mut self) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
         let mut node = self.parse_statement()?;
 
         while let Some(tok) = self.peek() {
-            match tok {
-                Token::Then => {
+            match tok.kind {
+                TokenKind::Then => {
                     self.consume();
                     let right = self.parse_statement()?;
-                    node = AstNode::Sequential(Box::new(node), Box::new(right));
+                    node = AstNode::new(AstNodeKind::Sequential(Box::new(node), Box::new(right)), line, col);
                 }
-                Token::AndThen => {
+                TokenKind::AndThen => {
                     self.consume();
                     let right = self.parse_statement()?;
-                    node = AstNode::AndThen(Box::new(node), Box::new(right));
+                    node = AstNode::new(AstNodeKind::AndThen(Box::new(node), Box::new(right)), line, col);
                 }
-                Token::OrElse => {
+                TokenKind::OrElse => {
                     self.consume();
                     let right = self.parse_statement()?;
-                    node = AstNode::OrElse(Box::new(node), Box::new(right));
+                    node = AstNode::new(AstNodeKind::OrElse(Box::new(node), Box::new(right)), line, col);
                 }
-                Token::WhileAsync => {
+                TokenKind::WhileAsync => {
                     self.consume();
                     let right = self.parse_statement()?;
-                    node = AstNode::Parallel(Box::new(node), Box::new(right));
+                    node = AstNode::new(AstNodeKind::Parallel(Box::new(node), Box::new(right)), line, col);
                 }
-                Token::Job => {
+                TokenKind::Job => {
                     self.consume();
-                    node = AstNode::Background(Box::new(node));
+                    node = AstNode::new(AstNodeKind::Background(Box::new(node)), line, col);
                 }
                 _ => break,
             }
@@ -68,18 +80,29 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<AstNode, IshError> {
         if let Some(tok) = self.peek() {
-            match tok {
-                Token::If => self.parse_if_statement(),
-                Token::For => self.parse_for_loop(),
-                Token::WhileAsync => self.parse_while_loop(),
-                Token::Function => self.parse_function(),
-                Token::Return => {
+            match tok.kind {
+                TokenKind::If => self.parse_if_statement(),
+                TokenKind::For => self.parse_for_loop(),
+                TokenKind::WhileAsync => self.parse_while_loop(),
+                TokenKind::Function => self.parse_function(),
+                TokenKind::Return => {
+                    let (line, col) = self.get_location();
                     self.consume();
                     let val = self.parse_pipeline()?;
-                    Ok(AstNode::Return(Box::new(val)))
+                    Ok(AstNode::new(AstNodeKind::Return(Box::new(val)), line, col))
                 }
-                Token::Variable(_) => {
-                    if self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1], Token::Assign) {
+                TokenKind::Break => {
+                    let (line, col) = self.get_location();
+                    self.consume();
+                    Ok(AstNode::new(AstNodeKind::Break, line, col))
+                }
+                TokenKind::Continue => {
+                    let (line, col) = self.get_location();
+                    self.consume();
+                    Ok(AstNode::new(AstNodeKind::Continue, line, col))
+                }
+                TokenKind::Variable(_) => {
+                    if self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1].kind, TokenKind::Assign) {
                         self.parse_assignment()
                     } else {
                         self.parse_pipeline()
@@ -93,112 +116,136 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Result<AstNode, IshError> {
-        let var_name = if let Some(Token::Variable(v)) = self.consume() {
-            v
+        let (line, col) = self.get_location();
+        let var_name = if let Some(tok) = self.consume() {
+            if let TokenKind::Variable(v) = tok.kind {
+                v
+            } else {
+                return Err(IshError::ParseError("Expected variable for assignment".to_string()));
+            }
         } else {
             return Err(IshError::ParseError("Expected variable for assignment".to_string()));
         };
-        self.consume(); // Consume Token::Assign
+        self.consume(); // Consume TokenKind::Assign
         let value = self.parse_statement()?; 
-        Ok(AstNode::Assignment { variable: var_name, value: Box::new(value) })
+        Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(value) }, line, col))
     }
 
     fn parse_if_statement(&mut self) -> Result<AstNode, IshError> {
-        self.consume(); // Consume Token::If or Token::Elif
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::If or TokenKind::Elif
         
         let condition = self.parse_pipeline()?;
         let body = self.parse_block()?;
         
         let mut else_body = None;
-        if let Some(Token::Else) = self.peek() {
-            self.consume();
-            else_body = Some(self.parse_block()?);
-        } else if let Some(Token::Elif) = self.peek() {
-            let elif_node = self.parse_if_statement()?;
-            else_body = Some(vec![elif_node]);
+        if let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::Else) {
+                self.consume();
+                else_body = Some(self.parse_block()?);
+            } else if matches!(tok.kind, TokenKind::Elif) {
+                let elif_node = self.parse_if_statement()?;
+                else_body = Some(vec![elif_node]);
+            }
         }
         
-        Ok(AstNode::If {
+        Ok(AstNode::new(AstNodeKind::If {
             condition: Box::new(condition),
             body,
             else_body,
-        })
+        }, line, col))
     }
 
     fn parse_for_loop(&mut self) -> Result<AstNode, IshError> {
-        self.consume(); // Consume Token::For
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::For
         
         let variable = match self.consume() {
-            Some(Token::Variable(v)) => v,
-            Some(Token::Word(w)) => w,
-            _ => return Err(IshError::ParseError("Expected variable name after 'for'".to_string())),
+            Some(tok) => match tok.kind {
+                TokenKind::Variable(v) => v,
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected variable name after 'for'".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected variable name after 'for'".to_string())),
         };
 
-        if let Some(Token::Word(w)) = self.peek() {
-            if w == "in" {
-                self.consume();
+        if let Some(tok) = self.peek() {
+            if let TokenKind::Word(w) = &tok.kind {
+                if w == "in" {
+                    self.consume();
+                }
             }
         }
         
         let iterable = self.parse_pipeline()?;
         let body = self.parse_block()?;
         
-        Ok(AstNode::For {
+        Ok(AstNode::new(AstNodeKind::For {
             variable,
             iterable: Box::new(iterable),
             body,
-        })
+        }, line, col))
     }
 
     fn parse_while_loop(&mut self) -> Result<AstNode, IshError> {
-        self.consume(); // Consume Token::WhileAsync
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::WhileAsync
         let condition = self.parse_pipeline()?;
         let body = self.parse_block()?;
-        Ok(AstNode::While { condition: Box::new(condition), body })
+        Ok(AstNode::new(AstNodeKind::While { condition: Box::new(condition), body }, line, col))
     }
 
     fn parse_function(&mut self) -> Result<AstNode, IshError> {
-        self.consume(); // Consume Token::Function
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Function
         let name = match self.consume() {
-            Some(Token::Word(w)) => w,
-            _ => return Err(IshError::ParseError("Expected function name".to_string())),
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected function name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected function name".to_string())),
         };
 
         let mut params = Vec::new();
-        if let Some(Token::LParen) = self.peek() {
-            self.consume();
-            while let Some(tok) = self.peek() {
-                if matches!(tok, Token::RParen) {
-                    self.consume();
-                    break;
-                }
-                if matches!(tok, Token::Comma) {
-                    self.consume();
-                    continue;
-                }
-                match self.consume() {
-                    Some(Token::Word(w)) | Some(Token::Variable(w)) => params.push(w),
-                    _ => return Err(IshError::ParseError("Expected parameter name".to_string())),
+        if let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::LParen) {
+                self.consume();
+                while let Some(tok) = self.peek() {
+                    if matches!(tok.kind, TokenKind::RParen) {
+                        self.consume();
+                        break;
+                    }
+                    if matches!(tok.kind, TokenKind::Comma) {
+                        self.consume();
+                        continue;
+                    }
+                    match self.consume() {
+                        Some(tok) => match tok.kind {
+                            TokenKind::Word(w) | TokenKind::Variable(w) => params.push(w),
+                            _ => return Err(IshError::ParseError("Expected parameter name".to_string())),
+                        },
+                        None => return Err(IshError::ParseError("Expected parameter name".to_string())),
+                    }
                 }
             }
         }
 
         let body = self.parse_block()?;
-        Ok(AstNode::Function { name, params, body })
+        Ok(AstNode::new(AstNodeKind::Function { name, params, body }, line, col))
     }
 
     fn parse_block(&mut self) -> Result<Vec<AstNode>, IshError> {
         match self.consume() {
-            Some(Token::LBrace) => {}
+            Some(tok) if matches!(tok.kind, TokenKind::LBrace) => {}
             _ => return Err(IshError::ParseError("Expected '{' for block".to_string())),
         }
         
         let mut stmts = Vec::new();
         while let Some(tok) = self.peek() {
-            if matches!(tok, Token::RBrace) {
+            if matches!(tok.kind, TokenKind::RBrace) {
                 break;
             }
-            if matches!(tok, Token::Semicolon) {
+            if matches!(tok.kind, TokenKind::Semicolon) {
                 self.consume();
                 continue;
             }
@@ -206,7 +253,7 @@ impl Parser {
         }
         
         match self.consume() {
-            Some(Token::RBrace) => {}
+            Some(tok) if matches!(tok.kind, TokenKind::RBrace) => {}
             _ => return Err(IshError::ParseError("Expected '}' at end of block".to_string())),
         }
         
@@ -214,70 +261,140 @@ impl Parser {
     }
 
     fn parse_pipeline(&mut self) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
         let mut commands = vec![self.parse_command()?];
 
-        while let Some(Token::Pipe) = self.peek() {
-            self.consume(); // Consume ':'
-            commands.push(self.parse_command()?);
+        while let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::Pipe) {
+                self.consume(); // Consume ':'
+                commands.push(self.parse_command()?);
+            } else {
+                break;
+            }
         }
 
         if commands.len() == 1 {
             Ok(commands.pop().unwrap())
         } else {
-            Ok(AstNode::Pipeline(commands))
+            Ok(AstNode::new(AstNodeKind::Pipeline(commands), line, col))
         }
     }
 
     fn parse_command(&mut self) -> Result<AstNode, IshError> {
-        let program = if let Some(Token::Word(w)) = self.peek() {
-            let p = w.clone();
-            self.consume();
-            p
-        } else if let Some(Token::Variable(v)) = self.peek() {
-            let p = format!("${}", v);
-            self.consume();
-            p
+        let (line, col) = self.get_location();
+        
+        if let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::LBracket) {
+                self.consume();
+                let mut items = Vec::new();
+                while self.position < self.tokens.len() && !matches!(self.tokens[self.position].kind, TokenKind::RBracket) {
+                    items.push(self.parse_pipeline()?);
+                    if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
+                        self.consume();
+                    }
+                }
+                if self.position < self.tokens.len() {
+                    self.consume();
+                }
+                return Ok(AstNode::new(AstNodeKind::Array(items), line, col));
+            }
+        }
+
+        if let Some(tok) = self.peek() {
+            if let TokenKind::Word(w) = &tok.kind {
+                if w == "Map" && self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1].kind, TokenKind::LParen) {
+                    self.consume();
+                    self.consume();
+                    let mut items = Vec::new();
+                    while self.position < self.tokens.len() && !matches!(self.tokens[self.position].kind, TokenKind::RParen) {
+                        let key_node = self.parse_pipeline()?;
+                        if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
+                            self.consume();
+                        } else {
+                            return Err(IshError::ParseError("Expected comma after Map key".to_string()));
+                        }
+                        let val_node = self.parse_pipeline()?;
+                        
+                        let key_str = match &key_node.kind {
+                            AstNodeKind::Command { program, .. } => program.clone(),
+                            _ => "unknown_key".to_string(),
+                        };
+                        
+                        items.push((key_str, val_node));
+
+                        if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
+                            self.consume();
+                        }
+                    }
+                    if self.position < self.tokens.len() {
+                        self.consume();
+                    }
+                    return Ok(AstNode::new(AstNodeKind::Map(items), line, col));
+                }
+            }
+        }
+
+        let program = if let Some(tok) = self.peek() {
+            match &tok.kind {
+                TokenKind::Word(w) => {
+                    let p = w.clone();
+                    self.consume();
+                    p
+                }
+                TokenKind::Variable(v) => {
+                    let p = format!("${}", v);
+                    self.consume();
+                    p
+                }
+                _ => return Err(IshError::ParseError(format!("Expected command name, found line {}", tok.line))),
+            }
         } else {
             return Err(IshError::ParseError("Expected command name".to_string()));
         };
 
         if let Some(tok) = self.peek() {
-            let op = match tok {
-                Token::Equals => Some("=="),
-                Token::NotEquals => Some("!="),
-                Token::GreaterThan => Some(">"),
-                Token::LessThan => Some("<"),
-                Token::GreaterOrEq => Some(">="),
-                Token::LessOrEq => Some("<="),
+            let op = match tok.kind {
+                TokenKind::Equals => Some("=="),
+                TokenKind::NotEquals => Some("!="),
+                TokenKind::GreaterThan => Some(">"),
+                TokenKind::LessThan => Some("<"),
+                TokenKind::GreaterOrEq => Some(">="),
+                TokenKind::LessOrEq => Some("<="),
                 _ => None,
             };
 
             if let Some(op_str) = op {
                 self.consume(); // consume operator
-                let right_val = if let Some(Token::Word(w)) = self.peek() {
-                    let r = w.clone();
-                    self.consume();
-                    r
-                } else if let Some(Token::Variable(v)) = self.peek() {
-                    let r = format!("${}", v);
-                    self.consume();
-                    r
+                let right_val = if let Some(tok) = self.peek() {
+                    match &tok.kind {
+                        TokenKind::Word(w) => {
+                            let r = w.clone();
+                            self.consume();
+                            r
+                        }
+                        TokenKind::Variable(v) => {
+                            let r = format!("${}", v);
+                            self.consume();
+                            r
+                        }
+                        _ => return Err(IshError::ParseError("Expected value after operator".to_string())),
+                    }
                 } else {
                     return Err(IshError::ParseError("Expected value after operator".to_string()));
                 };
 
-                let left = AstNode::Command {
+                let left = AstNode::new(AstNodeKind::Command {
                     program, args: vec![], redirect_to: None, redirect_from: None, append_to: None, read_doc: None, merge_err: false,
-                };
-                let right = AstNode::Command {
+                }, line, col);
+                let right = AstNode::new(AstNodeKind::Command {
                     program: right_val, args: vec![], redirect_to: None, redirect_from: None, append_to: None, read_doc: None, merge_err: false,
-                };
+                }, line, col);
 
-                return Ok(AstNode::Condition {
+                return Ok(AstNode::new(AstNodeKind::Condition {
                     left: Box::new(left),
                     operator: op_str.to_string(),
                     right: Box::new(right),
-                });
+                }, line, col));
             }
         }
 
@@ -289,53 +406,79 @@ impl Parser {
         let mut merge_err = false;
 
         while let Some(tok) = self.peek() {
-            match tok {
-                Token::Word(_) | Token::Variable(_) => {
-                    match tok {
-                        Token::Variable(var) => args.push(format!("${}", var)),
-                        Token::Word(word) => args.push(word.clone()),
-                        _ => {}
-                    }
+            match &tok.kind {
+                TokenKind::Word(word) => {
+                    args.push(word.clone());
                     self.consume();
                 }
-                Token::AppendTo => {
+                TokenKind::Variable(var) => {
+                    args.push(format!("${}", var));
                     self.consume();
-                    if let Some(Token::Word(w)) = self.consume() {
-                        append_to = Some(w);
-                    } else if let Some(Token::DevNull) = self.peek() {
-                        self.consume();
-                        append_to = Some("DevNull".to_string());
+                }
+                TokenKind::AppendTo => {
+                    self.consume();
+                    if let Some(tok) = self.consume() {
+                        if let TokenKind::Word(w) = tok.kind {
+                            append_to = Some(w);
+                        } else {
+                            return Err(IshError::ParseError("Expected file after 'append to'".to_string()));
+                        }
+                    } else if let Some(tok) = self.peek() {
+                        if matches!(tok.kind, TokenKind::DevNull) {
+                            self.consume();
+                            append_to = Some("DevNull".to_string());
+                        } else {
+                            return Err(IshError::ParseError("Expected file after 'append to'".to_string()));
+                        }
                     } else {
                         return Err(IshError::ParseError("Expected file after 'append to'".to_string()));
                     }
                 }
-                Token::ReadDoc => {
+                TokenKind::ReadDoc => {
                     self.consume();
-                    if let Some(Token::Word(w)) = self.consume() {
-                        read_doc = Some(w);
+                    if let Some(tok) = self.consume() {
+                        if let TokenKind::Word(w) = tok.kind {
+                            read_doc = Some(w);
+                        } else {
+                            return Err(IshError::ParseError("Expected EOF word after 'read doc'".to_string()));
+                        }
                     } else {
                         return Err(IshError::ParseError("Expected EOF word after 'read doc'".to_string()));
                     }
                 }
-                Token::MergeErr => {
+                TokenKind::MergeErr => {
                     self.consume();
                     merge_err = true;
                 }
-                Token::RedirectTo => {
+                TokenKind::RedirectTo => {
                     self.consume();
-                    if let Some(Token::Word(w)) = self.consume() {
-                        redirect_to = Some(w);
-                    } else if let Some(Token::DevNull) = self.peek() {
-                        self.consume();
-                        redirect_to = Some("DevNull".to_string());
+                    if let Some(tok) = self.consume() {
+                        if let TokenKind::Word(w) = tok.kind {
+                            redirect_to = Some(w);
+                        } else if matches!(tok.kind, TokenKind::DevNull) {
+                            redirect_to = Some("DevNull".to_string());
+                        } else {
+                            return Err(IshError::ParseError("Expected file after 'to'".to_string()));
+                        }
+                    } else if let Some(tok) = self.peek() {
+                        if matches!(tok.kind, TokenKind::DevNull) {
+                            self.consume();
+                            redirect_to = Some("DevNull".to_string());
+                        } else {
+                            return Err(IshError::ParseError("Expected file after 'to'".to_string()));
+                        }
                     } else {
                         return Err(IshError::ParseError("Expected file after 'to'".to_string()));
                     }
                 }
-                Token::RedirectFrom => {
+                TokenKind::RedirectFrom => {
                     self.consume();
-                    if let Some(Token::Word(w)) = self.consume() {
-                        redirect_from = Some(w);
+                    if let Some(tok) = self.consume() {
+                        if let TokenKind::Word(w) = tok.kind {
+                            redirect_from = Some(w);
+                        } else {
+                            return Err(IshError::ParseError("Expected file after 'from'".to_string()));
+                        }
                     } else {
                         return Err(IshError::ParseError("Expected file after 'from'".to_string()));
                     }
@@ -344,7 +487,7 @@ impl Parser {
             }
         }
 
-        Ok(AstNode::Command {
+        Ok(AstNode::new(AstNodeKind::Command {
             program,
             args,
             redirect_to,
@@ -352,6 +495,6 @@ impl Parser {
             append_to,
             read_doc,
             merge_err,
-        })
+        }, line, col))
     }
 }

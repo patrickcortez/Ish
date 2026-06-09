@@ -39,9 +39,11 @@ the experience of the user.
 
 - `Parallel Execution`: instead of a '&' we use the literal word: "while".
 
-- `Operational Execution`: instead of a '&&' or '||' we use the literal words: "and then" and "or else" respectively.
+- `Operational Execution`: instead of a '&&' or '||' we use the literal words: "and then" and "or else" respectively (though `&&` and `||` are natively supported aliases!).
 
 - `Jobs` : instead of the typical & at the end for background processes, we use the literal word "job" at the end: `./myprog.exe job`.
+
+- `Core Utilities` : Internal built-in commands like `iecho`, `ils`, `icat`, `imkdir`, `irm` map directly to internal executions to ensure consistency across operating systems. A robust recursive descent math evaluator is built-in as `expr`.
 
 - `History` : A persistent disk backed history, accessible with arrow up/down. Stored at `./local/history.txt`.
 
@@ -54,7 +56,7 @@ Processes with screen buffers will takeover the screen as rightfully so.
 
 - `Job Control` : As with every shell this provides a way to control the jobs running in the background. You can bring them to the foreground with "fg", background with "bg" and kill with "kill" and many more tools to achieve sophisticated job management.
 
-- `Scripting Environment` : For scripting the **Ish** interpreter will have variables, arrays, if elif and else, nesting, loops (for,while and foreach) and functions. With the `.ish` extension, *.ish* script files /can be executed directly `./myscript.ish` as long as the syntax passes the *Linter*.
+- `Scripting Environment` : For scripting the **Ish** interpreter will have variables (with string interpolation), `[1,2,3]` Arrays, `Map(k, v)` Maps, if elif and else, nesting, loops (for, while and foreach with `break` and `continue`) and functions. With the `.ish` extension, *.ish* script files can be executed directly `./myscript.ish` as long as the syntax passes the *Linter*.
 
 - `Startup Script` : A proper shell should have its own start-up script, which obviously is named `.ishrc`.
 which holds the startup configuration of **Ish**.

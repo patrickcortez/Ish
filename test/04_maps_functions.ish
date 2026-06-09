@@ -1,0 +1,23 @@
+iecho "--- Starting Test 04: Maps & Functions ---"
+
+let config = Map("version", "1.0", "author", "Cortez", "mode", "production")
+
+iecho "Config loaded:"
+iecho "Version: $config[version]"
+iecho "Author: $config[author]"
+
+fn validate_config() {
+    iecho "Checking configuration state..."
+    if ( $config[mode] == "production" ) {
+        iecho "Production mode verified."
+        return "SUCCESS"
+    } else {
+        iecho "Development mode detected."
+        return "DEV_MODE"
+    }
+}
+
+let result = validate_config
+iecho "Function returned: $result"
+
+iecho "--- Test 04 Completed ---"

@@ -1,0 +1,16 @@
+iecho "--- Starting Test 01: Basics ---"
+
+user="Cortez"
+greeting="Welcome to Ish, $user!"
+iecho $greeting
+
+iecho "Current directory contents:"
+ils
+
+iecho "Creating a test directory..."
+imkdir test_dir
+
+iecho "Removing test directory..."
+irm test_dir
+
+iecho "--- Test 01 Completed ---"

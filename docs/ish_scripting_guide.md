@@ -18,9 +18,10 @@ Instead of using a semicolon `;`, Ish uses the explicit `then` keyword for conti
 ```
 
 ### Conditional Execution
-Instead of `&&` and `||`, Ish uses the natural language keywords `and then` and `or else`.
+Instead of `&&` and `||`, Ish natively encourages the natural language keywords `and then` and `or else`. However, standard `&&` and `||` are fully supported natively via the Tokenizer as aliases for user convenience!
 ```bash
 > build_project and then run_tests or else echo "Build Failed!"
+> build_project && run_tests || echo "Build Failed!"
 ```
 
 **Comparison Operators**:
@@ -60,11 +61,36 @@ Instead of using `&` to run nodes in parallel, Ish uses the `while` operator to 
 ## Scripting Elements
 Within a `.ish` script, you can leverage advanced programming capabilities natively evaluated by the Ish AST interpreter.
 
-### Variables
-Assign variables directly without spaces. Access them using the `$` prefix.
+### Variables and Interpolation
+Assign variables directly. Access them using the `$` prefix.
+Ish supports **String Interpolation** out of the box. Variables embedded inside strings are evaluated automatically.
 ```bash
 name="IshShell"
 echo "Running: $name"
+```
+
+### Data Structures
+Ish is fully Turing-complete with first-class data structure support.
+
+**Arrays**:
+Initialize natively using square brackets:
+```bash
+let my_arr = [ "apple", "banana", "cherry" ]
+echo "First item: $my_arr[0]"
+```
+
+**Maps**:
+Initialize maps natively using the `Map` constructor keyword:
+```bash
+let my_map = Map("name", "Ish", "version", "1.0")
+echo "Shell Name: $my_map[name]"
+```
+
+### Math Expressions
+Ish comes with a native recursive descent evaluator embedded as the `expr` internal utility for bodmas-compliant math!
+```bash
+let x = expr 5 + 10 * 2
+echo $x
 ```
 
 **State Variables**:
@@ -85,13 +111,15 @@ if ( $status == "success" ) {
 ```
 
 ### Loops
-Iterate elegantly using `for` and `foreach` block structures.
+Iterate elegantly using `for` and `foreach` block structures. Loop evaluation seamlessly supports `break` to exit instantly and `continue` to jump to the next iteration.
 ```bash
 for (i = 0, $i < 5) {
+    if ( $i == 3 ) { break }
     echo "Iteration: $i"
 }
 
 foreach (item in $files) {
+    if ( $item == "skip.txt" ) { continue }
     echo "Processing $item"
 }
 ```

@@ -1,5 +1,5 @@
 #[derive(Debug, PartialEq, Clone)]
-pub enum Token {
+pub enum TokenKind {
     Word(String),
     Variable(String),
 
@@ -34,20 +34,33 @@ pub enum Token {
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
+    Break,
+    Continue,
 
     // Symbols
     LBrace,         // {
     RBrace,         // }
     LParen,         // (
     RParen,         // )
+    LBracket,       // [
+    RBracket,       // ]
     Assign,         // =
     Comma,          // ,
     Semicolon,      // ; (Used in some for loops perhaps, though 'then' replaces it generally)
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub line: usize,
+    pub column: usize,
+}
+
 pub struct Tokenizer {
     input: Vec<char>,
     position: usize,
+    line: usize,
+    column: usize,
 }
 
 impl Tokenizer {
@@ -55,7 +68,21 @@ impl Tokenizer {
         Self {
             input: input.chars().collect(),
             position: 0,
+            line: 1,
+            column: 1,
         }
+    }
+
+    fn advance(&mut self) -> char {
+        let ch = self.input[self.position];
+        self.position += 1;
+        if ch == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+        ch
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, crate::error::IshError> {
@@ -67,153 +94,183 @@ impl Tokenizer {
                 break;
             }
 
+            let start_line = self.line;
+            let start_column = self.column;
             let ch = self.input[self.position];
 
-            match ch {
-                ':' => {
-                    tokens.push(Token::Pipe);
-                    self.position += 1;
+            let kind = match ch {
+                ':' | '|' => {
+                    if ch == '|' && self.position + 1 < self.input.len() && self.input[self.position + 1] == '|' {
+                        self.advance();
+                        self.advance();
+                        TokenKind::OrElse
+                    } else {
+                        self.advance();
+                        TokenKind::Pipe
+                    }
+                }
+                '&' => {
+                    if self.position + 1 < self.input.len() && self.input[self.position + 1] == '&' {
+                        self.advance();
+                        self.advance();
+                        TokenKind::AndThen
+                    } else {
+                        self.advance();
+                        TokenKind::Word("&".to_string())
+                    }
                 }
                 '{' => {
-                    tokens.push(Token::LBrace);
-                    self.position += 1;
+                    self.advance();
+                    TokenKind::LBrace
                 }
                 '}' => {
-                    tokens.push(Token::RBrace);
-                    self.position += 1;
+                    self.advance();
+                    TokenKind::RBrace
                 }
                 '(' => {
-                    tokens.push(Token::LParen);
-                    self.position += 1;
+                    self.advance();
+                    TokenKind::LParen
                 }
                 ')' => {
-                    tokens.push(Token::RParen);
-                    self.position += 1;
+                    self.advance();
+                    TokenKind::RParen
+                }
+                '[' => {
+                    self.advance();
+                    TokenKind::LBracket
+                }
+                ']' => {
+                    self.advance();
+                    TokenKind::RBracket
                 }
                 '=' => {
-                    self.position += 1;
+                    self.advance();
                     if self.position < self.input.len() && self.input[self.position] == '=' {
-                        self.position += 1;
-                        tokens.push(Token::Equals);
+                        self.advance();
+                        TokenKind::Equals
                     } else {
-                        tokens.push(Token::Assign);
+                        TokenKind::Assign
                     }
                 }
                 '!' => {
-                    self.position += 1;
+                    self.advance();
                     if self.position < self.input.len() && self.input[self.position] == '=' {
-                        self.position += 1;
-                        tokens.push(Token::NotEquals);
+                        self.advance();
+                        TokenKind::NotEquals
                     } else {
-                        tokens.push(Token::Word("!".to_string()));
+                        TokenKind::Word("!".to_string())
                     }
                 }
                 '>' => {
-                    self.position += 1;
+                    self.advance();
                     if self.position < self.input.len() && self.input[self.position] == '=' {
-                        self.position += 1;
-                        tokens.push(Token::GreaterOrEq);
+                        self.advance();
+                        TokenKind::GreaterOrEq
                     } else {
-                        tokens.push(Token::GreaterThan);
+                        TokenKind::GreaterThan
                     }
                 }
                 '<' => {
-                    self.position += 1;
+                    self.advance();
                     if self.position < self.input.len() && self.input[self.position] == '=' {
-                        self.position += 1;
-                        tokens.push(Token::LessOrEq);
+                        self.advance();
+                        TokenKind::LessOrEq
                     } else {
-                        tokens.push(Token::LessThan);
+                        TokenKind::LessThan
                     }
                 }
                 ',' => {
-                    tokens.push(Token::Comma);
-                    self.position += 1;
+                    self.advance();
+                    TokenKind::Comma
                 }
                 '$' => {
-                    self.position += 1;
+                    self.advance();
                     let var_name = self.read_word();
-                    tokens.push(Token::Variable(var_name));
+                    TokenKind::Variable(var_name)
                 }
                 '"' | '\'' => {
                     let string_val = self.read_string(ch)?;
-                    tokens.push(Token::Word(string_val));
+                    TokenKind::Word(string_val)
                 }
                 _ => {
                     let word = self.read_word();
                     if word.is_empty() {
-                        // Edge case fallback
-                        self.position += 1;
+                        self.advance();
                         continue;
                     }
 
-                    // Handle multi-word keywords
                     if word == "and" {
                         self.skip_whitespace();
                         let next_word = self.peek_word();
                         if next_word == "then" {
-                            self.read_word(); // Consume 'then'
-                            tokens.push(Token::AndThen);
+                            self.read_word();
+                            TokenKind::AndThen
                         } else {
-                            tokens.push(Token::Word(word));
+                            TokenKind::Word(word)
                         }
                     } else if word == "or" {
                         self.skip_whitespace();
                         let next_word = self.peek_word();
                         if next_word == "else" {
-                            self.read_word(); // Consume 'else'
-                            tokens.push(Token::OrElse);
+                            self.read_word();
+                            TokenKind::OrElse
                         } else {
-                            tokens.push(Token::Word(word));
+                            TokenKind::Word(word)
                         }
                     } else if word == "append" {
                         self.skip_whitespace();
                         let next_word = self.peek_word();
                         if next_word == "to" {
                             self.read_word();
-                            tokens.push(Token::AppendTo);
+                            TokenKind::AppendTo
                         } else {
-                            tokens.push(Token::Word(word));
+                            TokenKind::Word(word)
                         }
                     } else if word == "read" {
                         self.skip_whitespace();
                         let next_word = self.peek_word();
                         if next_word == "doc" {
                             self.read_word();
-                            tokens.push(Token::ReadDoc);
+                            TokenKind::ReadDoc
                         } else {
-                            tokens.push(Token::Word(word));
+                            TokenKind::Word(word)
                         }
                     } else if word == "merge" {
                         self.skip_whitespace();
                         let next_word = self.peek_word();
                         if next_word == "err" {
                             self.read_word();
-                            tokens.push(Token::MergeErr);
+                            TokenKind::MergeErr
                         } else {
-                            tokens.push(Token::Word(word));
+                            TokenKind::Word(word)
                         }
                     } else {
-                        // Check single keywords
                         match word.as_str() {
-                            "to" => tokens.push(Token::RedirectTo),
-                            "from" => tokens.push(Token::RedirectFrom),
-                            "DevNull" => tokens.push(Token::DevNull),
-                            "then" => tokens.push(Token::Then),
-                            "while" => tokens.push(Token::WhileAsync), // Parser determines if it's async operator or while loop
-                            "job" => tokens.push(Token::Job),
-                            "if" => tokens.push(Token::If),
-                            "elif" => tokens.push(Token::Elif),
-                            "else" => tokens.push(Token::Else),
-                            "for" => tokens.push(Token::For),
-                            "foreach" => tokens.push(Token::Foreach),
-                            "fn" => tokens.push(Token::Function),
-                            "return" => tokens.push(Token::Return),
-                            _ => tokens.push(Token::Word(word)),
+                            "to" => TokenKind::RedirectTo,
+                            "from" => TokenKind::RedirectFrom,
+                            "DevNull" => TokenKind::DevNull,
+                            "then" => TokenKind::Then,
+                            "while" => TokenKind::WhileAsync,
+                            "job" => TokenKind::Job,
+                            "if" => TokenKind::If,
+                            "elif" => TokenKind::Elif,
+                            "else" => TokenKind::Else,
+                            "for" => TokenKind::For,
+                            "foreach" => TokenKind::Foreach,
+                            "fn" => TokenKind::Function,
+                            "return" => TokenKind::Return,
+                            "break" => TokenKind::Break,
+                            "continue" => TokenKind::Continue,
+                            _ => TokenKind::Word(word),
                         }
                     }
                 }
-            }
+            };
+            tokens.push(Token {
+                kind,
+                line: start_line,
+                column: start_column,
+            });
         }
 
         Ok(tokens)
@@ -221,7 +278,7 @@ impl Tokenizer {
 
     fn skip_whitespace(&mut self) {
         while self.position < self.input.len() && self.input[self.position].is_whitespace() {
-            self.position += 1;
+            self.advance();
         }
     }
 
@@ -233,20 +290,24 @@ impl Tokenizer {
                 break;
             }
             word.push(ch);
-            self.position += 1;
+            self.advance();
         }
         word
     }
 
     fn peek_word(&mut self) -> String {
         let original_pos = self.position;
+        let original_line = self.line;
+        let original_col = self.column;
         let word = self.read_word();
         self.position = original_pos;
+        self.line = original_line;
+        self.column = original_col;
         word
     }
 
     fn read_string(&mut self, quote: char) -> Result<String, crate::error::IshError> {
-        self.position += 1; // skip opening quote
+        self.advance(); // skip opening quote
         let mut string_val = String::new();
         let mut escaped = false;
 
@@ -258,12 +319,12 @@ impl Tokenizer {
             } else if ch == '\\' {
                 escaped = true;
             } else if ch == quote {
-                self.position += 1; // skip closing quote
+                self.advance(); // skip closing quote
                 return Ok(string_val);
             } else {
                 string_val.push(ch);
             }
-            self.position += 1;
+            self.advance();
         }
 
         Err(crate::error::IshError::ParseError("Unterminated string".to_string()))

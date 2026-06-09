@@ -1,0 +1,29 @@
+iecho "--- Starting Test 03: Loops & Arrays ---"
+
+let my_array = [ "apple", "banana", "cherry", "date", "elderberry" ]
+
+iecho "Array created. First element is: $my_array[0]"
+iecho "Third element is: $my_array[2]"
+
+iecho "Iterating through array using foreach loop with skip:"
+
+foreach ( fruit in $my_array ) {
+    if ( $fruit == "cherry" ) {
+        iecho "Skipping cherry..."
+        continue
+    }
+    
+    if ( $fruit == "date" ) {
+        iecho "Breaking out early at date!"
+        break
+    }
+    
+    iecho "Processed: $fruit"
+}
+
+iecho "Iterating through standard for loop:"
+for ( i = 0, $i < 3 ) {
+    iecho "For iteration: $i"
+}
+
+iecho "--- Test 03 Completed ---"

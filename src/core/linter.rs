@@ -1,4 +1,4 @@
-use crate::core::ast::AstNode;
+use crate::core::ast::{AstNode, AstNodeKind};
 use crate::error::IshError;
 use std::collections::{HashMap, HashSet};
 
@@ -22,10 +22,10 @@ impl Linter {
     }
 
     fn check_node(&mut self, node: &AstNode) -> Result<(), IshError> {
-        match node {
-            AstNode::Command { program, args, redirect_to, redirect_from, .. } => {
+        match &node.kind {
+            AstNodeKind::Command { program, args, redirect_to, redirect_from, .. } => {
                 if program.is_empty() {
-                    return Err(IshError::ParseError("Empty command detected".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Empty command detected", node.line, node.column)));
                 }
 
                 // If program is a variable, make sure it is defined
@@ -50,54 +50,55 @@ impl Linter {
                 // Check invalid redirection combinations
                 if redirect_to.is_some() && redirect_to == redirect_from {
                     return Err(IshError::ParseError(format!(
-                        "Linter Error: Cannot redirect to and from the same file '{}'",
+                        "Linter Error at Line {}, Column {}: Cannot redirect to and from the same file '{}'",
+                        node.line, node.column,
                         redirect_to.as_ref().unwrap()
                     )));
                 }
             }
-            AstNode::Pipeline(nodes) => {
+            AstNodeKind::Pipeline(nodes) => {
                 if nodes.len() < 2 {
-                    return Err(IshError::ParseError("Linter Error: Pipeline requires at least two commands".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Pipeline requires at least two commands", node.line, node.column)));
                 }
                 for n in nodes {
                     self.check_node(n)?;
                 }
             }
-            AstNode::Sequential(left, right)
-            | AstNode::AndThen(left, right)
-            | AstNode::OrElse(left, right)
-            | AstNode::Parallel(left, right) => {
+            AstNodeKind::Sequential(left, right)
+            | AstNodeKind::AndThen(left, right)
+            | AstNodeKind::OrElse(left, right)
+            | AstNodeKind::Parallel(left, right) => {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
-            AstNode::Condition { left, right, .. } => {
+            AstNodeKind::Condition { left, right, .. } => {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
-            AstNode::Background(inner) => {
+            AstNodeKind::Background(inner) => {
                 self.check_node(inner)?;
             }
-            AstNode::If { condition, body, else_body } => {
+            AstNodeKind::If { condition, body, else_body } => {
                 self.check_node(condition)?;
                 if body.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: 'if' statement has an empty body".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'if' statement has an empty body", node.line, node.column)));
                 }
                 for n in body {
                     self.check_node(n)?;
                 }
                 if let Some(eb) = else_body {
                     if eb.is_empty() {
-                        return Err(IshError::ParseError("Linter Error: 'else' statement has an empty body".to_string()));
+                        return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'else' statement has an empty body", node.line, node.column)));
                     }
                     for n in eb {
                         self.check_node(n)?;
                     }
                 }
             }
-            AstNode::While { condition, body } => {
+            AstNodeKind::While { condition, body } => {
                 self.check_node(condition)?;
                 if body.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: 'while' loop has an empty body. Infinite spin risk!".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'while' loop has an empty body. Infinite spin risk!", node.line, node.column)));
                 }
                 self.in_loop_depth += 1;
                 for n in body {
@@ -105,14 +106,14 @@ impl Linter {
                 }
                 self.in_loop_depth -= 1;
             }
-            AstNode::For { variable, iterable, body } => {
+            AstNodeKind::For { variable, iterable, body } => {
                 if variable.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: 'for' loop missing variable name".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'for' loop missing variable name", node.line, node.column)));
                 }
                 self.defined_vars.insert(variable.clone());
                 self.check_node(iterable)?;
                 if body.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: 'for' loop has an empty body".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'for' loop has an empty body", node.line, node.column)));
                 }
                 self.in_loop_depth += 1;
                 for n in body {
@@ -120,42 +121,47 @@ impl Linter {
                 }
                 self.in_loop_depth -= 1;
             }
-            AstNode::Assignment { variable, value } => {
+            AstNodeKind::Assignment { variable, value } => {
                 if variable.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: Assignment missing variable name".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }
                 self.check_node(value)?;
                 self.defined_vars.insert(variable.clone());
             }
-            AstNode::Function { name, params, body } => {
+            AstNodeKind::Function { name, params, body } => {
                 if name.is_empty() {
-                    return Err(IshError::ParseError("Linter Error: Function defined without a name".to_string()));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Function defined without a name", node.line, node.column)));
                 }
                 if body.is_empty() {
-                    return Err(IshError::ParseError(format!("Linter Error: Function '{}' has an empty body", name)));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Function '{}' has an empty body", node.line, node.column, name)));
                 }
                 self.defined_functions.insert(name.clone(), params.len());
-                
-                // Add params to defined vars temporarily
-                let mut added_params = Vec::new();
-                for p in params {
-                    if !self.defined_vars.contains(p) {
-                        self.defined_vars.insert(p.clone());
-                        added_params.push(p.clone());
-                    }
+                let prev_vars = self.defined_vars.clone();
+                for param in params {
+                    self.defined_vars.insert(param.clone());
                 }
-
-                for n in body {
-                    self.check_node(n)?;
+                for stmt in body {
+                    self.check_node(stmt)?;
                 }
-
-                // Remove params
-                for p in added_params {
-                    self.defined_vars.remove(&p);
+                self.defined_vars = prev_vars;
+            }
+            AstNodeKind::Break | AstNodeKind::Continue => {
+                if self.in_loop_depth == 0 {
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'break' or 'continue' used outside of a loop", node.line, node.column)));
                 }
             }
-            AstNode::Return(inner) => {
+            AstNodeKind::Return(inner) => {
                 self.check_node(inner)?;
+            }
+            AstNodeKind::Array(items) => {
+                for item in items {
+                    self.check_node(item)?;
+                }
+            }
+            AstNodeKind::Map(items) => {
+                for (_, val) in items {
+                    self.check_node(val)?;
+                }
             }
         }
         Ok(())

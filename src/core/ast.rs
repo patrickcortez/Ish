@@ -1,5 +1,44 @@
+use std::collections::HashMap;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum IshValue {
+    String(String),
+    Array(Vec<IshValue>),
+    Map(HashMap<String, IshValue>),
+}
+
+impl IshValue {
+    pub fn to_string(&self) -> String {
+        match self {
+            IshValue::String(s) => s.clone(),
+            IshValue::Array(arr) => {
+                let s: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                format!("[{}]", s.join(", "))
+            }
+            IshValue::Map(m) => {
+                let mut s: Vec<String> = m.iter().map(|(k, v)| format!("{}=\"{}\"", k, v.to_string())).collect();
+                s.sort();
+                format!("Map({})", s.join(", "))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum AstNode {
+pub struct AstNode {
+    pub kind: AstNodeKind,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl AstNode {
+    pub fn new(kind: AstNodeKind, line: usize, column: usize) -> Self {
+        Self { kind, line, column }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AstNodeKind {
     /// A basic command (e.g., `ls -l`)
     Command {
         program: String,
@@ -71,4 +110,12 @@ pub enum AstNode {
 
     /// Return statement
     Return(Box<AstNode>),
+
+    Break,
+
+    Continue,
+
+    Array(Vec<AstNode>),
+    
+    Map(Vec<(String, AstNode)>),
 }

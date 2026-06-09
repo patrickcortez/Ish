@@ -353,7 +353,7 @@ impl App {
 
             self.history.add(cmd.to_string());
 
-            if cmd == "exit" || cmd == "quit" {
+            if cmd == "quit" {
                 break;
             } else if self.config.current_config.autocd && (cmd.starts_with('/') || cmd.starts_with('\\')) {
                 let path_str = cmd[1..].trim();
@@ -372,12 +372,6 @@ impl App {
                 }
             } else if self.config.current_config.autocd && std::path::Path::new(cmd).is_dir() {
                 if let Err(e) = std::env::set_current_dir(cmd) {
-                    eprintln!("cd error: {}", e);
-                }
-                continue;
-            } else if cmd.starts_with("cd ") {
-                let path = cmd[3..].trim();
-                if let Err(e) = std::env::set_current_dir(path) {
                     eprintln!("cd error: {}", e);
                 }
                 continue;
