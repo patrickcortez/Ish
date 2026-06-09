@@ -76,7 +76,7 @@ impl App {
 
             let prompt = format!(
                 "\x01{}\x02\x01{}\x02 {} \x01{}\x02\x01{}\x02\u{e0b0} \x01{}\x02\x01{}\x02{}@{} \x01{}\x02\x01{}\x02\u{e0b0} \x01{}\x02\x01{}\x02\u{f07c} {} \x01{}\x02\x01{}\x02\u{e0b0}\x01{}\x02 ",
-                bg_blue, fg_white, os_icon.trim(),
+                bg_blue, fg_white, os_icon,
                 bg_gray, fg_blue,
                 bg_gray, fg_white, user, host,
                 bg_darkblue, fg_gray,

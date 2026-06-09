@@ -19,11 +19,11 @@ pub fn print_banner() {
     println!();
     println!("{border}╭────────────────────────────────────────────────────────────╮{reset}");
     println!("{border}│{reset}                                                            {border}│{reset}");
-    println!("{border}│{reset}  {c1}██████ ██████ ██  ██{reset}                                    {border}│{reset}");
-    println!("{border}│{reset}  {c2}  ██   ██     ██  ██{reset}                                    {border}│{reset}");
-    println!("{border}│{reset}  {c3}  ██   ██████ ██████{reset}                                    {border}│{reset}");
-    println!("{border}│{reset}  {c4}  ██       ██ ██  ██{reset}                                    {border}│{reset}");
-    println!("{border}│{reset}  {c5}██████ ██████ ██  ██{reset}                                    {border}│{reset}");
+    println!("{border}│{reset}  {c1}██████ ██████ ██  ██{reset}                                      {border}│{reset}");
+    println!("{border}│{reset}  {c2}  ██   ██     ██  ██{reset}                                      {border}│{reset}");
+    println!("{border}│{reset}  {c3}  ██   ██████ ██████{reset}                                      {border}│{reset}");
+    println!("{border}│{reset}  {c4}  ██       ██ ██  ██{reset}                                      {border}│{reset}");
+    println!("{border}│{reset}  {c5}██████ ██████ ██  ██{reset}                                      {border}│{reset}");
     println!("{border}│{reset}                                                            {border}│{reset}");
     println!("{border}├────────────────────────────────────────────────────────────┤{reset}");
     
@@ -34,11 +34,11 @@ pub fn print_banner() {
         sys_str = format!("v{}  |  {} Linux  |  {}@{}", version, "\u{f17c}", user, host);
     }
     
-    while sys_str.chars().count() < 56 {
+    while sys_str.chars().count() < 58 {
         sys_str.push(' ');
     }
-    if sys_str.chars().count() > 56 {
-        sys_str = sys_str.chars().take(56).collect();
+    if sys_str.chars().count() > 58 {
+        sys_str = sys_str.chars().take(58).collect();
     }
     
     println!("{border}│{reset}  \x1b[36m{}{border}│{reset}", sys_str);
