@@ -487,6 +487,10 @@ impl Parser {
                     args.push(word.clone());
                     self.consume();
                 }
+                TokenKind::Assign => {
+                    args.push("=".to_string());
+                    self.consume();
+                }
                 TokenKind::LParen => {
                     args.push("(".to_string());
                     self.consume();

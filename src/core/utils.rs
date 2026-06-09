@@ -37,12 +37,25 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                 }
                 return Ok(Some(out));
             }
-            for arg in args {
-                let parts: Vec<&str> = arg.splitn(2, '=').collect();
-                if parts.len() == 2 {
-                    unsafe { env::set_var(parts[0], parts[1]); }
+            let mut i = 0;
+            while i < args.len() {
+                if i + 2 < args.len() && args[i + 1] == "=" {
+                    unsafe { env::set_var(&args[i], &args[i + 2]); }
+                    i += 3;
+                } else if i + 1 < args.len() && args[i].ends_with('=') {
+                    unsafe { env::set_var(args[i].trim_end_matches('='), &args[i + 1]); }
+                    i += 2;
+                } else if i + 1 < args.len() && args[i + 1].starts_with('=') {
+                    unsafe { env::set_var(&args[i], args[i + 1].trim_start_matches('=')); }
+                    i += 2;
                 } else {
-                    unsafe { env::set_var(parts[0], ""); }
+                    let parts: Vec<&str> = args[i].splitn(2, '=').collect();
+                    if parts.len() == 2 {
+                        unsafe { env::set_var(parts[0], parts[1]); }
+                    } else {
+                        unsafe { env::set_var(parts[0], ""); }
+                    }
+                    i += 1;
                 }
             }
             Ok(Some(String::new()))
