@@ -429,7 +429,20 @@ impl Highlighter for SuggestionManager {
             return std::borrow::Cow::Borrowed(prompt);
         }
         
-        std::borrow::Cow::Borrowed(prompt)
+        let mut result = String::with_capacity(prompt.len() + 40);
+        let mut in_ansi = false;
+        for c in prompt.chars() {
+            if c == '\x1b' {
+                result.push('\x01');
+                in_ansi = true;
+            }
+            result.push(c);
+            if in_ansi && c == 'm' {
+                result.push('\x02');
+                in_ansi = false;
+            }
+        }
+        std::borrow::Cow::Owned(result)
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
