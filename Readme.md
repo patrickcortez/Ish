@@ -4,7 +4,9 @@
 2. [Features](#features)
 3. [Strcuture](#structure)
 4. [Installation](#installation)
- 4.1 [Uninstallation](#uninstall)
+  
+   4.1 [Uninstallation](#uninstall)
+  
 5. [Documentations](#documentations)
 6. [License](#license)
 
