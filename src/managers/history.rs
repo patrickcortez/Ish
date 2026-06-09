@@ -16,7 +16,11 @@ impl HistoryManager {
             std::env::var("HOME").unwrap_or_else(|_| String::from("."))
         };
         let mut path = PathBuf::from(home_dir);
-        path.push(".ish_history");
+        path.push(".ish");
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
+        path.push("history.txt");
 
         let mut manager = Self {
             history: Vec::new(),
@@ -89,5 +93,11 @@ impl HistoryManager {
 
     pub fn get_all(&self) -> &[String] {
         &self.history
+    }
+
+    pub fn clear(&mut self) {
+        self.history.clear();
+        self.current_index = 0;
+        self.save();
     }
 }

@@ -26,7 +26,16 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> Result<Self> {
-        let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let home_dir = if cfg!(target_os = "windows") {
+            std::env::var("USERPROFILE").unwrap_or_else(|_| String::from("."))
+        } else {
+            std::env::var("HOME").unwrap_or_else(|_| String::from("."))
+        };
+        let mut path = PathBuf::from(home_dir);
+        path.push(".ish");
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
         path.push(".ishrc");
         
         let mut manager = Self {

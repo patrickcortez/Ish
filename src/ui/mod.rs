@@ -281,6 +281,16 @@ impl App {
                 self.config.current_config.editor = editor.to_string();
                 println!("Editor set to: {}", editor);
                 continue;
+            } else if cmd == ":history" {
+                let all = self.history.get_all();
+                for (i, h) in all.iter().enumerate() {
+                    println!("{}: {}", i + 1, h);
+                }
+                continue;
+            } else if cmd == ":history clear" {
+                self.history.clear();
+                println!("History cleared.");
+                continue;
             } else if cmd == "jobs" {
                 let out = self.jobs.list_jobs();
                 print!("{}", out);
