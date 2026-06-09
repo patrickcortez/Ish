@@ -26,6 +26,61 @@ pub struct App {
     pub sugg_engine: SuggestionManager,
 }
 
+fn get_git_status() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain", "-b"])
+        .output()
+        .ok()?;
+    
+    if !output.status.success() {
+        return None;
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut branch = String::new();
+    let mut added = 0;
+    let mut modified = 0;
+    let mut deleted = 0;
+    let mut untracked = 0;
+    
+    for line in stdout.lines() {
+        if line.starts_with("##") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() > 1 {
+                let branch_part = parts[1];
+                let b: Vec<&str> = branch_part.split("...").collect();
+                branch = b[0].to_string();
+            }
+        } else if line.len() >= 2 {
+            let status = &line[0..2];
+            if status == "??" {
+                untracked += 1;
+            } else {
+                if status.contains('A') { added += 1; }
+                if status.contains('M') { modified += 1; }
+                if status.contains('D') { deleted += 1; }
+            }
+        }
+    }
+    
+    if branch.is_empty() {
+        return None;
+    }
+    
+    let mut details = String::new();
+    if added > 0 { details.push_str(&format!("+{} ", added)); }
+    if modified > 0 { details.push_str(&format!("~{} ", modified)); }
+    if deleted > 0 { details.push_str(&format!("-{} ", deleted)); }
+    if untracked > 0 { details.push_str(&format!("?{} ", untracked)); }
+    
+    let details = details.trim();
+    if details.is_empty() {
+        Some(format!("\u{e0a0} {}", branch))
+    } else {
+        Some(format!("\u{e0a0} {} [{}]", branch, details))
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -61,7 +116,16 @@ impl App {
             let os_icon = if std::env::consts::OS == "windows" { "\u{e70f} " } else if std::env::consts::OS == "macos" { "\u{f179} " } else { "\u{f17c} " };
             let user = env::var("USER").or_else(|_| env::var("USERNAME")).unwrap_or_else(|_| "user".to_string());
             let host = env::var("COMPUTERNAME").or_else(|_| env::var("HOSTNAME")).unwrap_or_else(|_| "host".to_string());
-            let pwd = env::current_dir().unwrap_or_default().display().to_string();
+            let home_dir = if cfg!(target_os = "windows") {
+                env::var("USERPROFILE").unwrap_or_default()
+            } else {
+                env::var("HOME").unwrap_or_default()
+            };
+            
+            let mut pwd = env::current_dir().unwrap_or_default().display().to_string();
+            if !home_dir.is_empty() && pwd.starts_with(&home_dir) {
+                pwd = pwd.replacen(&home_dir, "~", 1);
+            }
             
             let bg_blue = "\x1b[48;2;0;120;215m";
             let fg_white = "\x1b[38;5;255m";
@@ -76,16 +140,35 @@ impl App {
             let fg_darkblue = "\x1b[38;2;30;30;30m"; 
             let reset = "\x1b[0m";
 
-            let prompt = format!(
-                "{}{} {} {}{}\u{e0b0} {}{}{}@{} {}{}\u{e0b0} {}{}\u{f07c} {} {}{}\u{e0b0}{} ",
+            let mut prompt = format!(
+                "{}{} {} {}{}\u{e0b0} {}{}{}@{} {}{}\u{e0b0} {}{}\u{f07c} {} ",
                 bg_blue, fg_white, os_icon,
                 bg_gray, fg_blue,
                 bg_gray, fg_white, user, host,
                 bg_darkblue, fg_gray,
-                bg_darkblue, fg_white, pwd,
-                reset_bg, fg_darkblue,
-                reset
+                bg_darkblue, fg_white, pwd
             );
+
+            if let Some(git_status) = get_git_status() {
+                let bg_git = "\x1b[48;2;40;100;40m"; // Dark green
+                let fg_git = "\x1b[38;5;255m";
+                let fg_darkblue_git = "\x1b[38;2;30;30;30m"; 
+                let fg_git_bg = "\x1b[38;2;40;100;40m";
+                
+                prompt.push_str(&format!(
+                    "{}{}\u{e0b0} {}{} {} {}{}\u{e0b0}{} ",
+                    bg_git, fg_darkblue_git,
+                    bg_git, fg_git, git_status,
+                    reset_bg, fg_git_bg,
+                    reset
+                ));
+            } else {
+                prompt.push_str(&format!(
+                    "{}{}\u{e0b0}{} ",
+                    reset_bg, fg_darkblue,
+                    reset
+                ));
+            }
 
             let mut buffer = String::new();
             let mut cursor_pos = 0;
