@@ -14,7 +14,7 @@
 
 ## Overview
 
-**Ish** or *Intelli-Shell* is a cross platform system shell with a built in intellisense that suggests what
+**Ish** or *Integrated-Shell* is a cross platform system shell with a suggestion engine that suggests what
 the next possible command is. The purpose of the shell is to make the command-line
 experience of the user as convenient as possible while making it aesthetically pleasing.
 
@@ -49,10 +49,7 @@ the experience of the user.
 
 - `Command Execution` : For executing commands the shell will use what ever tools/commands and user installed pacakages/apps is available in the OS. Linux: /usr/bin, MacOS: /bin, Windows: {Find *WSL* Path then /usr/bin, if *WSL* is not installed then we use PowerShell and use their cmdlets and properly pipe Objects}
 
-- `Suggestions` : *Suggestions* is a TUI card that pops up above the *input box* anchored at the bottom of the screen. It suggests the likely commands you are typing, you can scroll with up/down to navigate the suggestions and right arrow to accept the suggestion. Not just commands it will also suggest files and directories when entering arguments of a command, it will also suggest environmental variables when entering with a suffix '$'.
-
-- `Input Box`: Unlike traditional unix like shells, the *input box* is a static TUI box anchored at the bottom of the screen, which is where all input occurs. When a process with its own input is launched the stdin of **Ish** is redirected to the process until the process is over which is redirected back to **Ish**.
-Processes with screen buffers will takeover the screen as rightfully so.
+- `Suggestions` : *Suggestions* is a ghost text that predicts the next possible command, file or directory based on the OS.
 
 - `Job Control` : As with every shell this provides a way to control the jobs running in the background. You can bring them to the foreground with "fg", background with "bg" and kill with "kill" and many more tools to achieve sophisticated job management.
 
@@ -62,10 +59,9 @@ Processes with screen buffers will takeover the screen as rightfully so.
 which holds the startup configuration of **Ish**.
 
 - `Configuration Commands` : These are special built in commands only available to **Ish**:
-  - `:Color <flags: --inputbox,--output,--banner,> <color: Name or Hexadecimal Value>` changes the color of the **Ish** GUI.
   - `:Toggle <flags: --autocd (true/false),--suggestions (true/false)>` toggles *Auto-Suggest* with the prefix '[' and suffix ']', its **on** by default. toggles *Suggestions* on or off its on by default.
   The configs are then saved in the `.ishrc` file and will be applied on the next run of **Ish**.
-  - `:Editor <editor name>` sets the default text editor to be used for automatic editing of text files with the prefix '/'.
+  - `:Editor <editor name>` sets the default text editor to be used for automatic editing of text files with the prefix '@'.
 
 ---
 

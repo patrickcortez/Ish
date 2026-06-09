@@ -401,7 +401,30 @@ impl App {
             } else if cmd.starts_with(":Editor ") {
                 let editor = cmd[8..].trim();
                 self.config.current_config.editor = editor.to_string();
+                let _ = self.config.save();
                 println!("Editor set to: {}", editor);
+                continue;
+            } else if cmd.starts_with("@") {
+                let path_str = cmd[1..].trim();
+                if path_str.is_empty() {
+                    println!("Usage: @<filename>");
+                    continue;
+                }
+                let editor = if self.config.current_config.editor.is_empty() {
+                    if cfg!(target_os = "windows") { "notepad" } else { "nano" }
+                } else {
+                    &self.config.current_config.editor
+                };
+                let mut exec = std::process::Command::new(editor);
+                exec.arg(path_str);
+                match exec.status() {
+                    Ok(status) => {
+                        if !status.success() {
+                            eprintln!("Editor exited with status: {}", status);
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to launch editor '{}': {}", editor, e),
+                }
                 continue;
             } else if cmd == ":history" {
                 let all = self.history.get_all();
