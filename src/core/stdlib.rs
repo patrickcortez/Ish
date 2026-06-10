@@ -191,3 +191,44 @@ impl StdlibProvider for IshFS {
         }
     }
 }
+
+pub struct IshTime;
+
+impl StdlibProvider for IshTime {
+    fn name(&self) -> &'static str {
+        "IshTime"
+    }
+
+    fn handles_command(&self, cmd: &str) -> bool {
+        cmd.starts_with("time_")
+    }
+
+    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
+        match cmd {
+            "time_now" => {
+                Ok(chrono::Utc::now().to_rfc3339())
+            }
+            "time_unix" => {
+                Ok(chrono::Utc::now().timestamp().to_string())
+            }
+            "time_format" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("time_format requires <timestamp_or_rfc3339> <format>".to_string())); }
+                let dt = if let Ok(unix) = args[0].parse::<i64>() {
+                    chrono::DateTime::from_timestamp(unix, 0).ok_or_else(|| IshError::ExecutionError("Invalid unix timestamp".to_string()))?
+                } else {
+                    chrono::DateTime::parse_from_rfc3339(&args[0])
+                        .map_err(|e| IshError::ExecutionError(e.to_string()))?
+                        .with_timezone(&chrono::Utc)
+                };
+                Ok(dt.format(&args[1]).to_string())
+            }
+            "time_parse" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("time_parse requires <time_string> <format>".to_string())); }
+                let dt = chrono::NaiveDateTime::parse_from_str(&args[0], &args[1])
+                    .map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(dt.and_utc().timestamp().to_string())
+            }
+            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshTime", cmd)))
+        }
+    }
+}

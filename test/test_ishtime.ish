@@ -1,0 +1,10 @@
+declare now = time_now
+declare unix = time_unix
+
+declare fmt = time_format $now "%Y-%m-%d"
+declare parsed = time_parse "2026-06-10 07:00:00" "%Y-%m-%d %H:%M:%S"
+
+out "Now: $now"
+out "Unix: $unix"
+out "Formatted: $fmt"
+out "Parsed Unix: $parsed"
