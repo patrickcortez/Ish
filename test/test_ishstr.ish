@@ -1,0 +1,25 @@
+declare my_arr = [ "apple", "banana", "cherry" ]
+declare joined = str_join $my_arr "-"
+out "Joined: $joined"
+
+declare str = "apple-banana-cherry"
+declare splitted = str_split $str "-"
+out "Splitted: $splitted"
+
+declare lowered = str_tolower "HELLO"
+out "Lowered: $lowered"
+
+declare uppered = str_toupper "world"
+out "Uppered: $uppered"
+
+declare reversed = str_reverse "IshShell"
+out "Reversed: $reversed"
+
+declare substr = str_substr "Hello World" 6 11
+out "Substr: $substr"
+
+declare replaced = str_replace "Hello World" "World" "Ish"
+out "Replaced: $replaced"
+
+declare contains = str_contains "Hello World" "World"
+out "Contains: $contains"

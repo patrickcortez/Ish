@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use std::fs::File;
 use std::io::Write;
 use std::collections::HashMap;
+use crate::core::stdlib::{StdlibProvider, IshStr};
 use crate::managers::job_controller::JobController;
 
 pub struct Executor {
@@ -14,6 +15,7 @@ pub struct Executor {
     pub returning: bool,
     pub breaking: bool,
     pub continuing: bool,
+    pub stdlib_providers: Vec<Box<dyn StdlibProvider>>,
 }
 
 impl Executor {
@@ -26,6 +28,7 @@ impl Executor {
             returning: false,
             breaking: false,
             continuing: false,
+            stdlib_providers: vec![Box::new(IshStr)],
         }
     }
 
@@ -299,6 +302,39 @@ impl Executor {
 
                 let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
 
+                for provider in &self.stdlib_providers {
+                    if provider.handles_command(&final_program) {
+                        match provider.execute(&final_program, &final_args) {
+                            Ok(output) => {
+                                self.last_exit_code = 0;
+                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
+                                
+                                if let Some(path) = out_file {
+                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                    let _ = file.write_all(output.as_bytes());
+                                } else if let Some(path) = redirect_to {
+                                    if path != "DevNull" {
+                                        let mut file = File::create(path)?;
+                                        let _ = file.write_all(output.as_bytes());
+                                    }
+                                } else if let Some(path) = append_to {
+                                    if path != "DevNull" {
+                                        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                        let _ = file.write_all(output.as_bytes());
+                                    }
+                                } else {
+                                    print!("{}", out_str);
+                                    let _ = std::io::stdout().flush();
+                                }
+                                return Ok(true);
+                            }
+                            Err(e) => {
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+
                 let mut internal_result = match final_program.as_str() {
                     "jobs" => Ok(Some(jobs.list_jobs())),
                     "fg" => {
@@ -516,6 +552,44 @@ impl Executor {
                         }
 
                         let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
+
+                        let mut stdlib_handled = false;
+                        for provider in &self.stdlib_providers {
+                            if provider.handles_command(&final_program) {
+                                stdlib_handled = true;
+                                match provider.execute(&final_program, &final_args) {
+                                    Ok(output) => {
+                                        self.last_exit_code = 0;
+                                        last_cmd_success = true;
+                                        if i < nodes.len() - 1 {
+                                            internal_output = Some(output);
+                                            let _ = previous_stdout.take();
+                                        } else {
+                                            if let Some(path) = out_file {
+                                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                                let _ = file.write_all(output.as_bytes());
+                                            } else if let Some(path) = redirect_to {
+                                                if path != "DevNull" {
+                                                    let mut file = File::create(path)?;
+                                                    let _ = file.write_all(output.as_bytes());
+                                                }
+                                            } else {
+                                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
+                                                print!("{}", out_str);
+                                                let _ = std::io::stdout().flush();
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        return Err(e);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        if stdlib_handled {
+                            continue;
+                        }
 
                         match crate::core::utils::execute_internal(&final_program, &final_args) {
                             Ok(Some(output)) => {
@@ -987,6 +1061,7 @@ impl Executor {
                     returning: false,
                     breaking: false,
                     continuing: false,
+                    stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
                 };
                 let mut exec_right = Executor {
                     script_args: self.script_args.clone(),
@@ -996,6 +1071,7 @@ impl Executor {
                     returning: false,
                     breaking: false,
                     continuing: false,
+                    stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
                 };
                 let left_node = left.clone();
                 let right_node = right.clone();
