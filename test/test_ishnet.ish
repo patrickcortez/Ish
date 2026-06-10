@@ -1,0 +1,9 @@
+declare ip = net_resolve "api.ipify.org"
+declare ip_me = net_ip
+declare is_avail = net_isavailable
+declare is_ping = net_ping "1.1.1.1"
+
+out "Resolve api.ipify.org: $ip"
+out "My IP: $ip_me"
+out "Internet Available: $is_avail"
+out "Ping 1.1.1.1: $is_ping"

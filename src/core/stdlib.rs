@@ -232,3 +232,98 @@ impl StdlibProvider for IshTime {
         }
     }
 }
+
+pub struct IshNet;
+
+impl StdlibProvider for IshNet {
+    fn name(&self) -> &'static str {
+        "IshNet"
+    }
+
+    fn handles_command(&self, cmd: &str) -> bool {
+        cmd.starts_with("net_")
+    }
+
+    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
+        match cmd {
+            "net_isavailable" => {
+                use std::net::ToSocketAddrs;
+                if "1.1.1.1:53".to_socket_addrs().is_ok() || "8.8.8.8:53".to_socket_addrs().is_ok() {
+                    Ok("true".to_string())
+                } else {
+                    Ok("false".to_string())
+                }
+            }
+            "net_ssid" => {
+                if cfg!(target_os = "windows") {
+                    if let Ok(output) = std::process::Command::new("netsh").args(&["wlan", "show", "interfaces"]).output() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        for line in stdout.lines() {
+                            if line.trim_start().starts_with("SSID") {
+                                let parts: Vec<&str> = line.split(':').collect();
+                                if parts.len() >= 2 {
+                                    return Ok(parts[1].trim().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok("".to_string())
+            }
+            "net_ip" => {
+                if let Ok(output) = std::process::Command::new("curl").args(&["-s", "https://api.ipify.org"]).output() {
+                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                } else {
+                    Err(IshError::ExecutionError("Failed to fetch IP".to_string()))
+                }
+            }
+            "net_ping" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("net_ping requires 1 argument".to_string())); }
+                let host = &args[0];
+                let (prog, ping_args) = if cfg!(target_os = "windows") {
+                    ("ping", vec!["-n", "1", host])
+                } else {
+                    ("ping", vec!["-c", "1", host])
+                };
+                if let Ok(status) = std::process::Command::new(prog).args(&ping_args).status() {
+                    if status.success() {
+                        return Ok("true".to_string());
+                    }
+                }
+                Ok("false".to_string())
+            }
+            "net_resolve" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("net_resolve requires 1 argument".to_string())); }
+                use std::net::ToSocketAddrs;
+                let query = if args[0].contains(':') { args[0].clone() } else { format!("{}:80", args[0]) };
+                match query.to_socket_addrs() {
+                    Ok(mut addrs) => {
+                        if let Some(addr) = addrs.next() {
+                            Ok(addr.ip().to_string())
+                        } else {
+                            Err(IshError::ExecutionError("Could not resolve host".to_string()))
+                        }
+                    }
+                    Err(e) => Err(IshError::ExecutionError(e.to_string()))
+                }
+            }
+            "net_get" | "net_getsecure" => {
+                if args.is_empty() { return Err(IshError::ExecutionError(format!("{} requires 1 argument", cmd))); }
+                if let Ok(output) = std::process::Command::new("curl").args(&["-sL", &args[0]]).output() {
+                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                } else {
+                    Err(IshError::ExecutionError("Failed to run curl".to_string()))
+                }
+            }
+            "net_post" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("net_post requires <url> <data>".to_string())); }
+                if let Ok(output) = std::process::Command::new("curl").args(&["-sL", "-X", "POST", "-d", &args[1], &args[0]]).output() {
+                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                } else {
+                    Err(IshError::ExecutionError("Failed to run curl".to_string()))
+                }
+            }
+            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshNet", cmd)))
+        }
+    }
+}
