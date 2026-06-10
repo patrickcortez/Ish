@@ -62,7 +62,7 @@ Instead of using `&` to run nodes in parallel, Ish uses the `while` operator to 
 Ish ships with cross-platform native commands evaluated internally without launching external processes:
 - `change <path>`: Change the current working directory.
 - `quit`: Exit the shell script / REPL.
-- `declare [var=val]`: Export or view environment variables.
+- `declare <var> = <val>`: Explicitly declare a variable.
 - `out <text>`: Print to standard output.
 - `cwd`: Print current working directory.
 - `show [path]`: List directory contents.
@@ -70,7 +70,6 @@ Ish ships with cross-platform native commands evaluated internally without launc
 - `create <-f|-d> <name>`: Create file (`-f`) or directory (`-d`).
 - `input [prompt]`: Wait for standard input string.
 - `inputkey [prompt]`: Intercept exactly one keystroke natively.
-- `expr <math>`: Evaluate math equations inline.
 - `jobs`: List all active background jobs.
 - `fg <id>`: Bring a background job to the foreground and wait for it to complete.
 - `kill <id>`: Forcefully terminate a running background job.
@@ -78,12 +77,17 @@ Ish ships with cross-platform native commands evaluated internally without launc
 ## Scripting Elements
 Within a `.ish` script, you can leverage advanced programming capabilities natively evaluated by the Ish AST interpreter.
 
-### Variables and Interpolation
-Assign variables directly. Access them using the `$` prefix.
-Ish supports **String Interpolation** out of the box. Variables embedded inside strings are evaluated automatically.
+### Variables, Types and Strict Declaration
+Ish uses strict variable declarations. You **must** declare a new variable using the `declare` keyword. Attempting to mutate a variable that hasn't been declared will result in a runtime execution error.
+Ish internally supports strong typing with `Int`, `Float`, `Bool`, and `Null` values, alongside native strings.
+
 ```bash
-name="IshShell"
+declare name = "IshShell"
+declare count = 10
 out "Running: $name"
+
+count = 20  # Valid mutation
+undeclared = 50 # Invalid: Throws an Execution Error
 ```
 
 ### Data Structures
@@ -92,22 +96,23 @@ Ish is fully Turing-complete with first-class data structure support.
 **Arrays**:
 Initialize natively using square brackets:
 ```bash
-let my_arr = [ "apple", "banana", "cherry" ]
+declare my_arr = [ "apple", "banana", "cherry" ]
 out "First item: $my_arr[0]"
 ```
 
 **Maps**:
 Initialize maps natively using the `Map` constructor keyword:
 ```bash
-let my_map = Map("name", "Ish", "version", "1.0")
+declare my_map = Map("name", "Ish", "version", "1.0")
 out "Shell Name: $my_map[name]"
 ```
 
-### Math Expressions
-Ish comes with a native recursive descent evaluator embedded as the `expr` internal utility for bodmas-compliant math!
+### Automatic Math Expressions
+Ish evaluates math expressions automatically using bodmas-compliant logic natively inside the AST without needing an `expr` utility. It handles types (Int and Float) safely!
 ```bash
-let x = expr 5 + 10 * 2
-out $x
+declare x = 5 + 10 * 2
+declare y = $x / 2.5
+out $y
 ```
 
 **State Variables**:
@@ -138,6 +143,18 @@ for (i = 0, $i < 5) {
 foreach (item in $files) {
     if ( $item == "skip.txt" ) { continue }
     out "Processing $item"
+}
+```
+
+### Try/Catch Error Handling
+Ish features an integrated `try/catch` architecture. It safely catches any execution or unhandled errors block-scoped during evaluation:
+```bash
+try {
+    declare sum = 10 + 20
+    undeclared_var = 50
+} catch $err {
+    out "An error occurred: "
+    out $err
 }
 ```
 
