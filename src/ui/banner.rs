@@ -43,7 +43,7 @@ pub fn print_banner() {
     
     println!("{border}│{reset}  \x1b[36m{}{border}│{reset}", sys_str);
     println!("{border}│{reset}  {text_dim}Type \x1b[36mhelp{text_dim} for commands, \x1b[36mexit{text_dim} to quit.{reset}                     {border}│{reset}");
-    println!("{border}│{reset}  {text_dim}Type \x1b[36mish-about{text_dim} to learn about Ishshell{reset}                    {border}│{reset}");
+    println!("{border}│{reset}  {text_dim}Type \x1b[36mhelp{text_dim} to also learn about Ishshell{reset}                    {border}│{reset}");
     println!("{border}╰────────────────────────────────────────────────────────────╯{reset}");
     println!();
 }

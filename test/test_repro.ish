@@ -1,1 +1,7 @@
-declare var="" then out "yo name is $var"
+fn func() {
+    num = 23
+    num = expr $num + 23
+    return out $num
+}
+res = func
+expr $res + 2

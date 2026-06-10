@@ -14,7 +14,7 @@
 
 ## Overview
 
-**Ish** or *Integrated-Shell* is a cross platform system shell with a suggestion engine that suggests what
+**Ish** or *Inter-Shell* is a cross platform system shell with a suggestion engine that suggests what
 the next possible command is. The purpose of the shell is to make the command-line
 experience of the user as convenient as possible while making it aesthetically pleasing.
 
@@ -43,7 +43,7 @@ the experience of the user.
 
 - `Jobs` : instead of the typical & at the end for background processes, we use the literal word "job" at the end: `./myprog.exe job`.
 
-- `Core Utilities` : Internal built-in commands like `iecho`, `ils`, `icat`, `imkdir`, `irm` map directly to internal executions to ensure consistency across operating systems. A robust recursive descent math evaluator is built-in as `expr`.
+- `Core Utilities` : Internal built-in commands like `out`, `show`, `read`, `create`, `change` map directly to internal executions to ensure consistency across operating systems. A robust recursive descent math evaluator is built-in as `expr`.
 
 - `History` : A persistent disk backed history, accessible with arrow up/down. Stored at `./local/history.txt`.
 
