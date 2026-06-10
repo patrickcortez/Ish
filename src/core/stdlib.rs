@@ -327,3 +327,92 @@ impl StdlibProvider for IshNet {
         }
     }
 }
+
+pub struct IshOS;
+
+impl StdlibProvider for IshOS {
+    fn name(&self) -> &'static str {
+        "IshOS"
+    }
+
+    fn handles_command(&self, cmd: &str) -> bool {
+        cmd.starts_with("os_")
+    }
+
+    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
+        match cmd {
+            "os_hostname" => {
+                if let Ok(output) = std::process::Command::new("hostname").output() {
+                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    Ok("".to_string())
+                }
+            }
+            "os_os" => Ok(std::env::consts::OS.to_string()),
+            "os_arch" => Ok(std::env::consts::ARCH.to_string()),
+            "os_platform" => Ok(std::env::consts::FAMILY.to_string()),
+            "os_version" => {
+                if cfg!(target_os = "windows") {
+                    if let Ok(output) = std::process::Command::new("cmd").args(&["/c", "ver"]).output() {
+                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    } else {
+                        Ok("".to_string())
+                    }
+                } else {
+                    if let Ok(output) = std::process::Command::new("uname").arg("-r").output() {
+                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    } else {
+                        Ok("".to_string())
+                    }
+                }
+            }
+            "os_getenvvars" => {
+                let vars: Vec<String> = std::env::vars().map(|(k, v)| format!("{}={}", k, v)).collect();
+                Ok(format!("[{}]", vars.join(", ")))
+            }
+            "os_getenvvar" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("os_getenvvar requires 1 argument".to_string())); }
+                Ok(std::env::var(&args[0]).unwrap_or_default())
+            }
+            "os_setenvvar" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("os_setenvvar requires <name> <value>".to_string())); }
+                unsafe {
+                    std::env::set_var(&args[0], &args[1]);
+                }
+                Ok("".to_string())
+            }
+            "os_exit" => {
+                let code = if args.is_empty() { 0 } else { args[0].parse::<i32>().unwrap_or(0) };
+                std::process::exit(code);
+            }
+            "os_sleep" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("os_sleep requires <ms>".to_string())); }
+                if let Ok(ms) = args[0].parse::<u64>() {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+                Ok("".to_string())
+            }
+            "os_clear" => {
+                print!("\x1B[2J\x1B[1;1H");
+                let _ = std::io::stdout().flush();
+                Ok("".to_string())
+            }
+            "os_users" => {
+                if cfg!(target_os = "windows") {
+                    if let Ok(output) = std::process::Command::new("net").arg("user").output() {
+                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    } else {
+                        Ok("".to_string())
+                    }
+                } else {
+                    if let Ok(output) = std::process::Command::new("cut").args(&["-d:", "-f1", "/etc/passwd"]).output() {
+                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    } else {
+                        Ok("".to_string())
+                    }
+                }
+            }
+            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshOS", cmd)))
+        }
+    }
+}

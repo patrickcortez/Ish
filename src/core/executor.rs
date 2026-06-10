@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::fs::File;
 use std::io::Write;
 use std::collections::HashMap;
-use crate::core::stdlib::{StdlibProvider, IshStr, IshFS, IshTime, IshNet};
+use crate::core::stdlib::{StdlibProvider, IshStr, IshFS, IshTime, IshNet, IshOS};
 use crate::managers::job_controller::JobController;
 
 pub struct Executor {
@@ -28,7 +28,7 @@ impl Executor {
             returning: false,
             breaking: false,
             continuing: false,
-            stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS), Box::new(IshTime), Box::new(IshNet)],
+            stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS), Box::new(IshTime), Box::new(IshNet), Box::new(IshOS)],
         }
     }
 
