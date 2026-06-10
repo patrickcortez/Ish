@@ -75,6 +75,10 @@ impl Linter {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
+            AstNodeKind::BinaryOperation { left, right, .. } => {
+                self.check_node(left)?;
+                self.check_node(right)?;
+            }
             AstNodeKind::Background(inner) => {
                 self.check_node(inner)?;
             }
@@ -93,6 +97,18 @@ impl Linter {
                     for n in eb {
                         self.check_node(n)?;
                     }
+                }
+            }
+            AstNodeKind::TryCatch { try_body, error_var, catch_body } => {
+                if try_body.is_empty() {
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'try' block is empty", node.line, node.column)));
+                }
+                for n in try_body {
+                    self.check_node(n)?;
+                }
+                self.defined_vars.insert(error_var.clone());
+                for n in catch_body {
+                    self.check_node(n)?;
                 }
             }
             AstNodeKind::While { condition, body } => {
@@ -121,7 +137,7 @@ impl Linter {
                 }
                 self.in_loop_depth -= 1;
             }
-            AstNodeKind::Assignment { variable, value } => {
+            AstNodeKind::Assignment { variable, value, is_declaration: _ } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }

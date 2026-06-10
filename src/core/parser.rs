@@ -130,13 +130,14 @@ impl Parser {
                     self.consume();
                     Ok(AstNode::new(AstNodeKind::Continue, line, col))
                 }
-                TokenKind::Let => {
-                    self.consume(); // Consume Let
-                    self.parse_assignment()
+                TokenKind::Declare => {
+                    self.consume(); // Consume Declare
+                    self.parse_assignment(true)
                 }
+                TokenKind::Try => self.parse_try_catch_statement(),
                 TokenKind::Variable(_) | TokenKind::Word(_) => {
                     if self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1].kind, TokenKind::Assign) {
-                        self.parse_assignment()
+                        self.parse_assignment(false)
                     } else {
                         self.parse_pipeline()
                     }
@@ -148,7 +149,7 @@ impl Parser {
         }
     }
 
-    fn parse_assignment(&mut self) -> Result<AstNode, IshError> {
+    fn parse_assignment(&mut self, is_declaration: bool) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
         let var_name = if let Some(tok) = self.consume() {
             match tok.kind {
@@ -164,12 +165,12 @@ impl Parser {
         // If the value is just a StringLiteral, we don't need to parse it as a full statement.
         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::StringLiteral(_))) {
             if let Some(TokenKind::StringLiteral(s)) = self.consume().map(|t| t.kind) {
-                return Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(AstNode::new(AstNodeKind::StringLiteral(s), line, col)) }, line, col));
+                return Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(AstNode::new(AstNodeKind::StringLiteral(s), line, col)), is_declaration }, line, col));
             }
         }
 
         let value = self.parse_statement()?; 
-        Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(value) }, line, col))
+        Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(value), is_declaration }, line, col))
     }
 
     fn parse_if_statement(&mut self) -> Result<AstNode, IshError> {
@@ -263,6 +264,42 @@ impl Parser {
         Ok(AstNode::new(AstNodeKind::While { condition: Box::new(condition), body }, line, col))
     }
 
+    fn parse_try_catch_statement(&mut self) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Try
+        let try_body = self.parse_block()?;
+
+        let mut error_var = "err".to_string();
+        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Catch)) {
+            self.consume(); // Consume TokenKind::Catch
+            if let Some(tok) = self.peek() {
+                match &tok.kind {
+                    TokenKind::Variable(v) => {
+                        error_var = v.clone();
+                        self.consume();
+                    }
+                    TokenKind::Word(w) => {
+                        if w != "{" {
+                            error_var = w.clone();
+                            self.consume();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            return Err(IshError::ParseError("Expected 'catch' block after 'try'".to_string()));
+        }
+
+        let catch_body = self.parse_block()?;
+
+        Ok(AstNode::new(AstNodeKind::TryCatch {
+            try_body,
+            error_var,
+            catch_body,
+        }, line, col))
+    }
+
     fn parse_function(&mut self) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
         self.consume(); // Consume TokenKind::Function
@@ -330,12 +367,12 @@ impl Parser {
 
     fn parse_pipeline(&mut self) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
-        let mut commands = vec![self.parse_command()?];
+        let mut commands = vec![self.parse_math_expression()?];
 
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::Pipe) {
                 self.consume(); // Consume ':'
-                commands.push(self.parse_command()?);
+                commands.push(self.parse_math_expression()?);
             } else {
                 break;
             }
@@ -346,6 +383,29 @@ impl Parser {
         } else {
             Ok(AstNode::new(AstNodeKind::Pipeline(commands), line, col))
         }
+    }
+
+    fn parse_math_expression(&mut self) -> Result<AstNode, IshError> {
+        let mut left = self.parse_command()?;
+        while let Some(tok) = self.peek() {
+            let op = match tok.kind {
+                TokenKind::Plus => "+",
+                TokenKind::Minus => "-",
+                TokenKind::Multiply => "*",
+                TokenKind::Divide => "/",
+                _ => break,
+            };
+            self.consume();
+            let right = self.parse_command()?;
+            let line = left.line;
+            let col = left.column;
+            left = AstNode::new(AstNodeKind::BinaryOperation {
+                left: Box::new(left),
+                operator: op.to_string(),
+                right: Box::new(right),
+            }, line, col);
+        }
+        Ok(left)
     }
 
     fn parse_command(&mut self) -> Result<AstNode, IshError> {
@@ -415,11 +475,15 @@ impl Parser {
                 TokenKind::Word(w) => {
                     let p = w.clone();
                     self.consume();
+                    if p.parse::<f64>().is_ok() || p == "true" || p == "false" || p == "null" {
+                        is_string_literal = true;
+                    }
                     p
                 }
                 TokenKind::Variable(v) => {
                     let p = format!("${}", v);
                     self.consume();
+                    is_string_literal = true;
                     p
                 }
                 _ => return Err(IshError::ParseError(format!("Expected command name, found {:?}", tok.kind))),

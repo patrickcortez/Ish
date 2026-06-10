@@ -1,0 +1,11 @@
+try {
+    declare x = 10
+    declare y = 20
+    declare sum = $x + $y
+    out $sum
+    out "Deliberate failure: "
+    undeclared_var = 5
+} catch $err {
+    out "Caught an error!"
+    out $err
+}

@@ -3,6 +3,10 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq)]
 pub enum IshValue {
     String(String),
+    Int(i32),
+    Float(f32),
+    Bool(bool),
+    Null,
     Array(Vec<IshValue>),
     Map(HashMap<String, IshValue>),
 }
@@ -11,6 +15,10 @@ impl IshValue {
     pub fn to_string(&self) -> String {
         match self {
             IshValue::String(s) => s.clone(),
+            IshValue::Int(i) => i.to_string(),
+            IshValue::Float(f) => f.to_string(),
+            IshValue::Bool(b) => b.to_string(),
+            IshValue::Null => "null".to_string(),
             IshValue::Array(arr) => {
                 let s: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                 format!("[{}]", s.join(", "))
@@ -89,10 +97,18 @@ pub enum AstNodeKind {
     Assignment {
         variable: String,
         value: Box<AstNode>,
+        is_declaration: bool,
     },
 
     /// Binary Condition (e.g. `$a == "test"`)
     Condition {
+        left: Box<AstNode>,
+        operator: String,
+        right: Box<AstNode>,
+    },
+
+    /// Mathematical Binary Operation
+    BinaryOperation {
         left: Box<AstNode>,
         operator: String,
         right: Box<AstNode>,
@@ -109,6 +125,13 @@ pub enum AstNodeKind {
         name: String,
         params: Vec<String>,
         body: Vec<AstNode>,
+    },
+
+    /// Try-Catch block
+    TryCatch {
+        try_body: Vec<AstNode>,
+        error_var: String,
+        catch_body: Vec<AstNode>,
     },
 
     /// Return statement

@@ -25,6 +25,10 @@ pub enum TokenKind {
     LessThan,       // <
     GreaterOrEq,    // >=
     LessOrEq,       // <=
+    Plus,           // +
+    Minus,          // -
+    Multiply,       // *
+    Divide,         // /
 
     // Scripting keywords
     If,
@@ -32,12 +36,14 @@ pub enum TokenKind {
     Else,
     For,
     Foreach,
-    Let,
+    Declare,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
     Break,
     Continue,
+    Try,
+    Catch,
 
     // Symbols
     LBrace,         // {
@@ -144,6 +150,22 @@ impl Tokenizer {
                 ']' => {
                     self.advance();
                     TokenKind::RBracket
+                }
+                '+' => {
+                    self.advance();
+                    TokenKind::Plus
+                }
+                '-' => {
+                    self.advance();
+                    TokenKind::Minus
+                }
+                '*' => {
+                    self.advance();
+                    TokenKind::Multiply
+                }
+                '/' => {
+                    self.advance();
+                    TokenKind::Divide
                 }
                 '\n' => {
                     self.advance();
@@ -263,11 +285,13 @@ impl Tokenizer {
                             "else" => TokenKind::Else,
                             "for" => TokenKind::For,
                             "foreach" => TokenKind::Foreach,
-                            "let" => TokenKind::Let,
+                            "declare" => TokenKind::Declare,
                             "fn" => TokenKind::Function,
                             "return" => TokenKind::Return,
                             "break" => TokenKind::Break,
                             "continue" => TokenKind::Continue,
+                            "try" => TokenKind::Try,
+                            "catch" => TokenKind::Catch,
                             _ => TokenKind::Word(word),
                         }
                     }
@@ -293,7 +317,7 @@ impl Tokenizer {
         let mut word = String::new();
         while self.position < self.input.len() {
             let ch = self.input[self.position];
-            if ch.is_whitespace() || "{}()=,:\"'$!<>".contains(ch) {
+            if ch.is_whitespace() || "{}()=,:\"'$!<>+-*/".contains(ch) {
                 break;
             }
             word.push(ch);

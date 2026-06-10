@@ -29,7 +29,7 @@ impl Executor {
         }
     }
 
-    fn resolve_var(&self, s: &str) -> String {
+    fn resolve_var(&self, s: &str) -> Result<String, IshError> {
         let mut result = String::new();
         let mut chars = s.chars().peekable();
         
@@ -88,14 +88,18 @@ impl Executor {
                     if !found {
                         if let Ok(val) = std::env::var(&var_name) {
                             result.push_str(&val);
+                            found = true;
                         }
+                    }
+                    if !found {
+                        return Err(IshError::ExecutionError(format!("Variable not found: {}", var_name)));
                     }
                 }
             } else {
                 result.push(c);
             }
         }
-        result
+        Ok(result)
     }
 
     fn resolve_executable(&self, program: &str, args: &[String]) -> (String, Vec<String>) {
@@ -126,9 +130,9 @@ impl Executor {
             Err(IshError::ExecutionError(e)) if e.starts_with("program not found: ") => {
                 let _ = std::fs::remove_file(&temp_path);
                 if let AstNodeKind::Command { program, args, .. } = &node.kind {
-                    let expected_err = format!("program not found: {}", self.resolve_var(program));
+                    let expected_err = format!("program not found: {}", self.resolve_var(program)?);
                     if e == expected_err && args.is_empty() {
-                        return Ok(self.resolve_var(program));
+                        return Ok(self.resolve_var(program)?);
                     }
                 }
                 Err(IshError::ExecutionError(e))
@@ -136,6 +140,118 @@ impl Executor {
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
                 Err(e)
+            }
+        }
+    }
+
+    pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
+        match &node.kind {
+            AstNodeKind::StringLiteral(s) => {
+                let resolved = self.resolve_var(s)?;
+                if let Ok(i) = resolved.parse::<i32>() {
+                    Ok(IshValue::Int(i))
+                } else if let Ok(f) = resolved.parse::<f32>() {
+                    Ok(IshValue::Float(f))
+                } else if resolved == "true" {
+                    Ok(IshValue::Bool(true))
+                } else if resolved == "false" {
+                    Ok(IshValue::Bool(false))
+                } else if resolved == "null" {
+                    Ok(IshValue::Null)
+                } else {
+                    Ok(IshValue::String(resolved))
+                }
+            }
+            AstNodeKind::BinaryOperation { left, operator, right } => {
+                let l_val = self.evaluate_node(left, jobs)?;
+                let r_val = self.evaluate_node(right, jobs)?;
+                
+                let (l_f, r_f) = match (&l_val, &r_val) {
+                    (IshValue::Int(i), IshValue::Int(j)) => return match operator.as_str() {
+                        "+" => Ok(IshValue::Int(i + j)),
+                        "-" => Ok(IshValue::Int(i - j)),
+                        "*" => Ok(IshValue::Int(i * j)),
+                        "/" => if *j == 0 { Err(IshError::ExecutionError("Division by zero".to_string())) } else { Ok(IshValue::Int(i / j)) },
+                        _ => Err(IshError::ExecutionError(format!("Unknown operator: {}", operator)))
+                    },
+                    (IshValue::Float(f1), IshValue::Float(f2)) => (*f1, *f2),
+                    (IshValue::Int(i), IshValue::Float(f)) => (*i as f32, *f),
+                    (IshValue::Float(f), IshValue::Int(i)) => (*f, *i as f32),
+                    _ => return Err(IshError::ExecutionError("Math operations require numerical types".to_string())),
+                };
+
+                match operator.as_str() {
+                    "+" => Ok(IshValue::Float(l_f + r_f)),
+                    "-" => Ok(IshValue::Float(l_f - r_f)),
+                    "*" => Ok(IshValue::Float(l_f * r_f)),
+                    "/" => Ok(IshValue::Float(l_f / r_f)),
+                    _ => Err(IshError::ExecutionError(format!("Unknown operator: {}", operator)))
+                }
+            }
+            AstNodeKind::Condition { left, operator, right } => {
+                let left_val = self.evaluate_node(left, jobs)?;
+                let right_val = self.evaluate_node(right, jobs)?;
+                
+                let success = match (left_val, right_val) {
+                    (IshValue::Int(l), IshValue::Int(r)) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        ">" => l > r,
+                        "<" => l < r,
+                        ">=" => l >= r,
+                        "<=" => l <= r,
+                        _ => false,
+                    },
+                    (IshValue::Float(l), IshValue::Float(r)) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        ">" => l > r,
+                        "<" => l < r,
+                        ">=" => l >= r,
+                        "<=" => l <= r,
+                        _ => false,
+                    },
+                    (IshValue::Int(l), IshValue::Float(r)) => match operator.as_str() {
+                        "==" => (l as f32) == r,
+                        "!=" => (l as f32) != r,
+                        ">" => (l as f32) > r,
+                        "<" => (l as f32) < r,
+                        ">=" => (l as f32) >= r,
+                        "<=" => (l as f32) <= r,
+                        _ => false,
+                    },
+                    (IshValue::Float(l), IshValue::Int(r)) => match operator.as_str() {
+                        "==" => l == (r as f32),
+                        "!=" => l != (r as f32),
+                        ">" => l > (r as f32),
+                        "<" => l < (r as f32),
+                        ">=" => l >= (r as f32),
+                        "<=" => l <= (r as f32),
+                        _ => false,
+                    },
+                    (l, r) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        _ => false,
+                    }
+                };
+                Ok(IshValue::Bool(success))
+            }
+            _ => {
+                let out = self.capture_output(node, jobs)?;
+                if let Ok(i) = out.parse::<i32>() {
+                    Ok(IshValue::Int(i))
+                } else if let Ok(f) = out.parse::<f32>() {
+                    Ok(IshValue::Float(f))
+                } else if out == "true" {
+                    Ok(IshValue::Bool(true))
+                } else if out == "false" {
+                    Ok(IshValue::Bool(false))
+                } else if out == "null" {
+                    Ok(IshValue::Null)
+                } else {
+                    Ok(IshValue::String(out))
+                }
             }
         }
     }
@@ -149,10 +265,10 @@ impl Executor {
     {
         match &node.kind {
             AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
-                let resolved_program = self.resolve_var(program);
+                let resolved_program = self.resolve_var(program)?;
                 let mut resolved_args = Vec::new();
                 for arg in args {
-                    resolved_args.push(self.resolve_var(arg));
+                    resolved_args.push(self.resolve_var(arg)?);
                 }
 
                 if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
@@ -368,10 +484,10 @@ impl Executor {
 
                 for (i, node) in nodes.iter().enumerate() {
                     if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &node.kind {
-                        let resolved_program = self.resolve_var(program);
+                        let resolved_program = self.resolve_var(program)?;
                         let mut resolved_args = Vec::new();
                         for arg in args {
-                            resolved_args.push(self.resolve_var(arg));
+                            resolved_args.push(self.resolve_var(arg)?);
                         }
 
                         if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
@@ -540,10 +656,10 @@ impl Executor {
             }
             AstNodeKind::Background(inner) => {
                 if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &inner.kind {
-                    let resolved_program = self.resolve_var(program);
+                    let resolved_program = self.resolve_var(program)?;
                     let mut resolved_args = Vec::new();
                     for arg in args {
-                        resolved_args.push(self.resolve_var(arg));
+                        resolved_args.push(self.resolve_var(arg)?);
                     }
                     if self.functions.contains_key(&resolved_program) {
                         return Err(IshError::ExecutionError("Cannot run custom functions in background via AstNodeKind::Background currently".into()));
@@ -620,77 +736,130 @@ impl Executor {
                 }
             }
             AstNodeKind::Condition { left, operator, right } => {
-                let left_val = self.capture_output(left, jobs)?;
-                let right_val = self.capture_output(right, jobs)?;
+                let left_val = self.evaluate_node(left, jobs)?;
+                let right_val = self.evaluate_node(right, jobs)?;
                 
-                let success = match operator.as_str() {
-                    "==" => left_val == right_val,
-                    "!=" => left_val != right_val,
-                    ">" | "<" | ">=" | "<=" => {
-                        let l_num = left_val.parse::<f64>();
-                        let r_num = right_val.parse::<f64>();
-                        if let (Ok(l), Ok(r)) = (l_num, r_num) {
-                            match operator.as_str() {
-                                ">" => l > r,
-                                "<" => l < r,
-                                ">=" => l >= r,
-                                "<=" => l <= r,
-                                _ => false,
-                            }
-                        } else {
-                            match operator.as_str() {
-                                ">" => left_val > right_val,
-                                "<" => left_val < right_val,
-                                ">=" => left_val >= right_val,
-                                "<=" => left_val <= right_val,
-                                _ => false,
-                            }
-                        }
+                let success = match (left_val, right_val) {
+                    (IshValue::Int(l), IshValue::Int(r)) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        ">" => l > r,
+                        "<" => l < r,
+                        ">=" => l >= r,
+                        "<=" => l <= r,
+                        _ => false,
+                    },
+                    (IshValue::Float(l), IshValue::Float(r)) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        ">" => l > r,
+                        "<" => l < r,
+                        ">=" => l >= r,
+                        "<=" => l <= r,
+                        _ => false,
+                    },
+                    (IshValue::Int(l), IshValue::Float(r)) => match operator.as_str() {
+                        "==" => (l as f32) == r,
+                        "!=" => (l as f32) != r,
+                        ">" => (l as f32) > r,
+                        "<" => (l as f32) < r,
+                        ">=" => (l as f32) >= r,
+                        "<=" => (l as f32) <= r,
+                        _ => false,
+                    },
+                    (IshValue::Float(l), IshValue::Int(r)) => match operator.as_str() {
+                        "==" => l == (r as f32),
+                        "!=" => l != (r as f32),
+                        ">" => l > (r as f32),
+                        "<" => l < (r as f32),
+                        ">=" => l >= (r as f32),
+                        "<=" => l <= (r as f32),
+                        _ => false,
+                    },
+                    (l, r) => match operator.as_str() {
+                        "==" => l == r,
+                        "!=" => l != r,
+                        _ => false,
                     }
-                    _ => false,
                 };
+                
                 self.last_exit_code = if success { 0 } else { 1 };
                 Ok(success)
             }
-            AstNodeKind::Assignment { variable, value } => {
+            AstNodeKind::BinaryOperation { .. } => {
+                let result = self.evaluate_node(node, jobs)?;
+                self.last_exit_code = 0;
+                use std::io::Write;
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(result.to_string().as_bytes());
+                } else {
+                    println!("{}", result.to_string());
+                }
+                Ok(true)
+            }
+            AstNodeKind::Assignment { variable, value, is_declaration } => {
                 let val = match &value.kind {
                     AstNodeKind::Array(items) => {
                         let mut arr = Vec::new();
                         for item in items {
-                            arr.push(IshValue::String(self.capture_output(item, jobs)?));
+                            arr.push(self.evaluate_node(item, jobs)?);
                         }
                         IshValue::Array(arr)
                     }
                     AstNodeKind::Map(items) => {
                         let mut m = HashMap::new();
                         for (k, v) in items {
-                            m.insert(k.clone(), IshValue::String(self.capture_output(v, jobs)?));
+                            m.insert(k.clone(), self.evaluate_node(v, jobs)?);
                         }
                         IshValue::Map(m)
                     }
-                    AstNodeKind::StringLiteral(s) => {
-                        IshValue::String(self.resolve_var(s))
-                    }
-                    _ => IshValue::String(self.capture_output(value, jobs)?),
+                    _ => self.evaluate_node(value, jobs)?,
                 };
-                if let Some(scope) = self.variables.last_mut() {
-                    scope.insert(variable.clone(), val);
+                
+                if *is_declaration {
+                    if let Some(scope) = self.variables.last_mut() {
+                        scope.insert(variable.clone(), val);
+                    }
+                } else {
+                    let mut found = false;
+                    for scope in self.variables.iter_mut().rev() {
+                        if scope.contains_key(variable) {
+                            scope.insert(variable.clone(), val.clone());
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        return Err(IshError::ExecutionError(format!("Variable '{}' is not declared. Use 'declare {} = ...' to declare it.", variable, variable)));
+                    }
                 }
                 Ok(true)
             }
             AstNodeKind::If { condition, body, else_body } => {
-                let success = self.execute_node_with_input(condition, "", None, jobs)?;
+                let success = match self.evaluate_node(condition, jobs)? {
+                    IshValue::Bool(b) => b,
+                    IshValue::Int(i) => i != 0,
+                    IshValue::Float(f) => f != 0.0,
+                    IshValue::String(s) => !s.is_empty() && s != "false" && s != "null",
+                    IshValue::Null => false,
+                    _ => true,
+                };
                 let mut block_success = true;
                 if success {
+                    self.variables.push(HashMap::new());
                     for stmt in body {
-                        if self.returning { break; }
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        if self.returning || self.breaking || self.continuing { break; }
                     }
+                    self.variables.pop();
                 } else if let Some(else_stmts) = else_body {
+                    self.variables.push(HashMap::new());
                     for stmt in else_stmts {
-                        if self.returning { break; }
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        if self.returning || self.breaking || self.continuing { break; }
                     }
+                    self.variables.pop();
                 }
                 Ok(block_success)
             }
@@ -699,13 +868,15 @@ impl Executor {
                 let mut block_success = true;
                 for item in items.split_whitespace() {
                     if self.returning || self.breaking { break; }
+                    self.variables.push(HashMap::new());
                     if let Some(scope) = self.variables.last_mut() {
                         scope.insert(variable.clone(), IshValue::String(item.to_string()));
                     }
                     for stmt in body {
-                        if self.returning || self.breaking || self.continuing { break; }
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        if self.returning || self.breaking || self.continuing { break; }
                     }
+                    self.variables.pop();
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -716,12 +887,21 @@ impl Executor {
             }
             AstNodeKind::While { condition, body } => {
                 let mut block_success = true;
-                while self.execute_node_with_input(condition, "", None, jobs)? {
+                while match self.evaluate_node(condition, jobs)? {
+                    IshValue::Bool(b) => b,
+                    IshValue::Int(i) => i != 0,
+                    IshValue::Float(f) => f != 0.0,
+                    IshValue::String(s) => !s.is_empty() && s != "false" && s != "null",
+                    IshValue::Null => false,
+                    _ => true,
+                } {
                     if self.returning || self.breaking { break; }
+                    self.variables.push(HashMap::new());
                     for stmt in body {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
+                    self.variables.pop();
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -729,6 +909,43 @@ impl Executor {
                 }
                 if self.breaking { self.breaking = false; }
                 Ok(block_success)
+            }
+            AstNodeKind::TryCatch { try_body, error_var, catch_body } => {
+                let mut success = true;
+                self.variables.push(HashMap::new());
+                for stmt in try_body {
+                    match self.execute_node_with_input(stmt, "", out_file, jobs) {
+                        Ok(s) => {
+                            if !s {
+                                success = false;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            success = false;
+                            self.variables.pop(); // pop try block scope
+                            
+                            self.variables.push(HashMap::new()); // push catch block scope
+                            if let Some(scope) = self.variables.last_mut() {
+                                scope.insert(error_var.clone(), IshValue::String(e.to_string()));
+                            }
+                            let mut catch_success = true;
+                            for c_stmt in catch_body {
+                                match self.execute_node_with_input(c_stmt, "", out_file, jobs) {
+                                    Ok(s) => if !s { catch_success = false; },
+                                    Err(_) => { catch_success = false; break; },
+                                }
+                            }
+                            self.variables.pop(); // pop catch block scope
+                            self.last_exit_code = if catch_success { 0 } else { 1 };
+                            return Ok(catch_success);
+                        }
+                    }
+                    if self.returning || self.breaking || self.continuing { break; }
+                }
+                self.variables.pop();
+                self.last_exit_code = if success { 0 } else { 1 };
+                Ok(success)
             }
             AstNodeKind::Break => {
                 self.breaking = true;
@@ -746,7 +963,7 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::StringLiteral(s) => {
-                let resolved = self.resolve_var(s);
+                let resolved = self.resolve_var(s)?;
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
                     let _ = file.write_all(resolved.as_bytes());
