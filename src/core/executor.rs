@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::fs::File;
 use std::io::Write;
 use std::collections::HashMap;
-use crate::core::stdlib::{StdlibProvider, IshStr};
+use crate::core::stdlib::{StdlibProvider, IshStr, IshFS};
 use crate::managers::job_controller::JobController;
 
 pub struct Executor {
@@ -28,7 +28,7 @@ impl Executor {
             returning: false,
             breaking: false,
             continuing: false,
-            stdlib_providers: vec![Box::new(IshStr)],
+            stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS)],
         }
     }
 
@@ -323,8 +323,10 @@ impl Executor {
                                         let _ = file.write_all(output.as_bytes());
                                     }
                                 } else {
-                                    print!("{}", out_str);
-                                    let _ = std::io::stdout().flush();
+                                     if !out_str.trim().is_empty() {
+                                        print!("{}", out_str);
+                                        let _ = std::io::stdout().flush();
+                                    }
                                 }
                                 return Ok(true);
                             }
@@ -575,8 +577,10 @@ impl Executor {
                                                 }
                                             } else {
                                                 let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
-                                                print!("{}", out_str);
-                                                let _ = std::io::stdout().flush();
+                                                if !out_str.trim().is_empty() {
+                                                    print!("{}", out_str);
+                                                    let _ = std::io::stdout().flush();
+                                                }
                                             }
                                         }
                                     }
