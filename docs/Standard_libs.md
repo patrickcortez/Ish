@@ -37,35 +37,13 @@ Name: **IshNet**
 
   - *net_ping <host>* - Pings a host (domain or IP address) and returns 0 or 1 depending if the host is recheable.
 
-  - *net_get <url> [headers]* - Sends an HTTP GET request to the specified URL. Returns a map containing the `status` code and response `body`.
+  - *net_get <url> [headers]* - Sends an HTTP GET request to the specified URL. Returns a string containing the response body.
 
-  - *net_post <url> <data> [headers]* - Sends an HTTP POST request to the specified URL with the provided data payload. Returns a map with `status` and `body`.
-
-  - *net_download <url> <dest_path>* - Downloads a file from the URL directly to the specified local destination path. Returns 0 on success, 1 on failure.
-
-  - *net_upload <url> <file_path>* - Uploads a local file to the specified URL using a multipart form request.
+  - *net_post <url> <data> [headers]* - Sends an HTTP POST request to the specified URL with the provided data payload. Returns a string containing the response body.
 
   - *net_resolve <domain>* - Performs a DNS lookup for the given domain name and returns its IP address as a string.
 
-  - *net_tcpclient <host> <port> <data>* - Establishes a TCP connection to the target host and port, sends the data string, and returns the server's response.
-
-  - *net_tcpserver <port> <callback>* - Starts a background TCP server on the given port. The `callback` function is triggered with `(client_id, data)` whenever a client sends data.
-
-  - *net_send <client_id> <data>* - Sends a data payload back to a specifically connected TCP or WebSocket client using their unique `client_id`.
-
-  - *net_close <client_id>* - Forcefully closes the connection with the specified client.
-
-  - *net_udpclient <host> <port> <data>* - Sends a UDP datagram to the target host and port.
-
-  - *net_udpserver <port> <callback>* - Listens for UDP datagrams on the given port and triggers the `callback` function with the received data.
-
-  - *net_websocketclient <url> <callback>* - Connects to a WebSocket server. The `callback` is triggered asynchronously whenever new messages are received.
-
-  - *net_websocketserver <port> <callback>* - Starts a WebSocket server on the given port. The `callback` is triggered with `(client_id, message)` for incoming real-time web traffic.
-
   - *net_getsecure <url> [headers]* - Identical to `net_get`, but strictly enforces a secure SSL/TLS (HTTPS) connection.
-
-  - *net_tcpserversecure <port> <cert_path> <key_path> <callback>* - Starts a secure TCP server encrypted with SSL/TLS using the provided certificates.
 
 ## String Utils
 
@@ -109,13 +87,9 @@ Name: **IshTime**
 
   - *time_unix* - returns a string containing the current unix time.
 
-  - *time_format <format>* - returns a string containing the current date and time formatted according to the given format.
+  - *time_format <timestamp_or_rfc3339> <format>* - returns a string containing the date and time formatted according to the given format. Supports unix timestamps or RFC3339 strings.
 
-  - *time_parse <format> <string>* - returns a string containing the parsed date and time from the given format.
-
-  - *time_since <time>* - returns a string containing the time since the given time.
-
-  - *time_until <time>* - returns a string containing the time until the given time.
+  - *time_parse <string> <format>* - returns a string containing the unix timestamp of the parsed date and time from the given string and format.
 
 ## Machine
 
@@ -135,17 +109,17 @@ Name: **IshOS**
 
   - *os_setenvvar <name> <value>* - sets the value of the environment variable with the given name to the given value.
 
-  - *os_cpucount* - returns the number of CPU cores on the machine.
-
-  - *os_totalmemory* - returns the total memory of the machine.
-
-  - *os_availablememory* - returns the available memory of the machine.
-
-  - *os_usedmemory* - returns the used memory of the machine.
-
   - *os_platform* - returns the platform of the machine.
 
   - *os_version* - returns the version of the machine.
+
+  - *os_exit [code]* - exits the script with the given exit code.
+
+  - *os_sleep <ms>* - pauses script execution for the given milliseconds.
+
+  - *os_clear* - clears the terminal screen.
+
+  - *os_users* - returns the list of users on the machine.
 
 ## Usage
 
