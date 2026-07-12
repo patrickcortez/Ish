@@ -1,4 +1,10 @@
-let name = input "What is your name?"
-out "Hello, $name!"
-let key = inputkey "Press any key to exit..."
-out "You pressed: $key"
+public static class Program {
+    public static func main() {
+        let name = input "What is your name?"
+        out "Hello, $name!"
+        let key = inputkey "Press any key to exit..."
+        out "You pressed: $key"
+        
+        return 0
+    }
+}

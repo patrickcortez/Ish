@@ -1,5 +1,11 @@
-fn my_func() {
-    out "Hello from func"
+public static class Program {
+    public static func main() {
+        fn my_func() {
+            out "Hello from func"
+        }
+        let res = my_func
+        out "result: $res"
+        
+        return 0
+    }
 }
-let res = my_func
-out "result: $res"

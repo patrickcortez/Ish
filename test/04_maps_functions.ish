@@ -1,23 +1,29 @@
-out "--- Starting Test 04: Maps & Functions ---"
-
-let config = Map("version", "1.0", "author", "Cortez", "mode", "production", )
-
-out "Config loaded:"
-out "Version: $config[version]"
-out "Author: $config[author]"
-
-fn validate_config() {
-    out "Checking configuration state..."
-    if ( $config[mode] == "production" ) {
-        out "Production mode verified."
-        return "SUCCESS"
-    } else {
-        out "Development mode detected."
-        return "DEV_MODE"
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 04: Maps & Functions ---"
+        
+        let config = Map("version", "1.0", "author", "Cortez", "mode", "production", )
+        
+        out "Config loaded:"
+        out "Version: $config[version]"
+        out "Author: $config[author]"
+        
+        fn validate_config() {
+            out "Checking configuration state..."
+            if ( $config[mode] == "production" ) {
+                out "Production mode verified."
+                return "SUCCESS"
+            } else {
+                out "Development mode detected."
+                return "DEV_MODE"
+            }
+        }
+        
+        let result = validate_config
+        out "Function returned: $result"
+        
+        out "--- Test 04 Completed ---"
+        
+        return 0
     }
 }
-
-let result = validate_config
-out "Function returned: $result"
-
-out "--- Test 04 Completed ---"

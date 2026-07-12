@@ -49,11 +49,11 @@ impl Parser {
         self.tokens.get(self.position)
     }
 
-    fn consume(&mut self) -> Option<Token> {
+    pub fn consume(&mut self) -> Option<Token> {
         if self.position < self.tokens.len() {
-            let t = self.tokens[self.position].clone();
+            let tok = self.tokens[self.position].clone();
             self.position += 1;
-            Some(t)
+            Some(tok)
         } else {
             None
         }
@@ -771,14 +771,6 @@ impl Parser {
                 }
                 TokenKind::Assign => {
                     args.push("=".to_string());
-                    self.consume();
-                }
-                TokenKind::LParen => {
-                    args.push("(".to_string());
-                    self.consume();
-                }
-                TokenKind::RParen => {
-                    args.push(")".to_string());
                     self.consume();
                 }
                 TokenKind::Variable(var) => {

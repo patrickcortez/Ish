@@ -402,60 +402,53 @@ impl Executor {
         // First pass: register all OOP declarations (namespaces, classes, structs)
         self.registry.register_declarations(ast)?;
 
-        // If OOP declarations were found, look for the Program::main entry point
-        if !self.registry.classes.is_empty() {
-            // Check for entry point; if found, execute it
-            match self.registry.find_entry_point() {
-                Ok(program_class_name) => {
-                    // First, execute all declarations so methods get registered in self.functions
-                    self.execute_node_with_input(ast, "", None, jobs)?;
+        // Enforce OOP requirement
+        match self.registry.find_entry_point() {
+            Ok(program_class_name) => {
+                // First, execute all declarations so methods get registered in self.functions
+                self.execute_node_with_input(ast, "", None, jobs)?;
 
-                    // Now invoke Program::main
-                    let class_def = self.registry.resolve_class("Program").cloned()
-                        .ok_or_else(|| IshError::ExecutionError(
-                            "Internal error: Program class disappeared after registration.".to_string()
-                        ))?;
+                // Now invoke Program::main
+                let class_def = self.registry.resolve_class("Program").cloned()
+                    .ok_or_else(|| IshError::ExecutionError(
+                        "Internal error: Program class disappeared after registration.".to_string()
+                    ))?;
 
-                    let main_method = class_def.methods.get("main")
-                        .ok_or_else(|| IshError::ExecutionError(
-                            "Internal error: main method disappeared after registration.".to_string()
-                        ))?;
+                let main_method = class_def.methods.get("main")
+                    .ok_or_else(|| IshError::ExecutionError(
+                        "Internal error: main method disappeared after registration.".to_string()
+                    ))?;
 
-                    self.variables.push(HashMap::new());
-                    self.function_bases.push(self.variables.len() - 1);
-                    let prev_class = self.current_class.clone();
-                    self.current_class = Some(program_class_name);
+                self.variables.push(HashMap::new());
+                self.function_bases.push(self.variables.len() - 1);
+                let prev_class = self.current_class.clone();
+                self.current_class = Some(program_class_name);
 
-                    let mut success = true;
-                    for stmt in &main_method.body {
-                        success = self.execute_node_with_input(stmt, "", None, jobs)?;
-                        if self.returning { break; }
-                    }
-
-                    // Retrieve return value (exit code)
-                    let ret_val = self.return_value.take();
-                    self.returning = false;
-                    self.function_bases.pop();
-                    self.variables.pop();
-                    self.current_class = prev_class;
-
-                    if let Some(IshValue::Int(code)) = ret_val {
-                        self.last_exit_code = code;
-                    }
-
-                    return Ok(success);
+                let mut success = true;
+                for stmt in &main_method.body {
+                    success = self.execute_node_with_input(stmt, "", None, jobs)?;
+                    if self.returning { break; }
                 }
-                Err(_) => {
-                    // Classes exist but no Program::main — this is an error for OOP scripts
-                    return Err(IshError::ParseError(
-                        "OOP declarations found but no valid entry point. Scripts with class/struct declarations must contain a 'public static class Program' with a 'public static func main()' method.".to_string()
-                    ));
+
+                // Retrieve return value (exit code)
+                let ret_val = self.return_value.take();
+                self.returning = false;
+                self.function_bases.pop();
+                self.variables.pop();
+                self.current_class = prev_class;
+
+                if let Some(IshValue::Int(code)) = ret_val {
+                    self.last_exit_code = code;
                 }
+
+                Ok(success)
+            }
+            Err(_) => {
+                Err(IshError::ParseError(
+                    "Script must define 'public static class Program' with a 'public static func main()' method.".to_string()
+                ))
             }
         }
-
-        // No OOP declarations: execute normally (legacy/scripting mode)
-        self.execute_node_with_input(ast, "", None, jobs)
     }
 
     fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> 
@@ -1478,14 +1471,6 @@ impl Executor {
                         self.current_class = prev_class;
 
                         if let Some(val) = ret_val {
-                            let output = val.to_string();
-                            if let Some(path) = out_file {
-                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                let _ = file.write_all(output.as_bytes());
-                            } else if !output.is_empty() {
-                                print!("{}", output);
-                                let _ = std::io::stdout().flush();
-                            }
                             self.return_value = Some(val);
                         }
 

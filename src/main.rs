@@ -34,7 +34,6 @@ fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, 
     let mut tokenizer = core::tokenizer::Tokenizer::new(cmd);
     let tokens = tokenizer.tokenize()?;
     if tokens.is_empty() { return Ok(()); }
-    
     let mut parser = core::parser::Parser::new(tokens);
     let ast = parser.parse()?;
     let mut linter = core::linter::Linter::new();

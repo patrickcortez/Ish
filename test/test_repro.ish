@@ -1,7 +1,13 @@
-fn func() {
-    declare num = 23
-    num = expr $num + 23
-    return out $num
+public static class Program {
+    public static func main() {
+        fn func() {
+            declare num = 23
+            num = expr $num + 23
+            return out $num
+        }
+        declare res = func
+        expr $res + 2
+        
+        return 0
+    }
 }
-declare res = func
-expr $res + 2

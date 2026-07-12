@@ -1,34 +1,40 @@
-declare myfile = "test_fs.txt"
-fs_writefile $myfile "Hello World from IshFS" false
-
-declare content = fs_readfile $myfile
-declare exists = fs_exists $myfile
-declare is_array = false
-if (content == "[Hello World from IshFS]") {
-    is_array = true
+public static class Program {
+    public static func main() {
+        declare myfile = "test_fs.txt"
+        fs_writefile $myfile "Hello World from IshFS" false
+        
+        declare content = fs_readfile $myfile
+        declare exists = fs_exists $myfile
+        declare is_array = false
+        if (content == "[Hello World from IshFS]") {
+            is_array = true
+        }
+        
+        fs_copy $myfile "test_fs_copy.txt"
+        declare copy_exists = fs_exists "test_fs_copy.txt"
+        
+        fs_move "test_fs_copy.txt" "test_fs_renamed.txt"
+        declare rename_exists = fs_exists "test_fs_renamed.txt"
+        declare orig_copy_exists = fs_exists "test_fs_copy.txt"
+        
+        fs_createdir "test_dir"
+        fs_writefile "test_dir/file1.txt" "f1" false
+        fs_writefile "test_dir/file2.txt" "f2" false
+        
+        declare listed = fs_list "test_dir"
+        
+        fs_deletefile $myfile
+        fs_deletefile "test_fs_renamed.txt"
+        fs_deletedir "test_dir"
+        
+        out "Content: $content"
+        out "Exists: $exists"
+        out "Is Array: $is_array"
+        out "Copy Exists: $copy_exists"
+        out "Rename Exists: $rename_exists"
+        out "Orig Copy Exists (should be false): $orig_copy_exists"
+        out "Listed: $listed"
+        
+        return 0
+    }
 }
-
-fs_copy $myfile "test_fs_copy.txt"
-declare copy_exists = fs_exists "test_fs_copy.txt"
-
-fs_move "test_fs_copy.txt" "test_fs_renamed.txt"
-declare rename_exists = fs_exists "test_fs_renamed.txt"
-declare orig_copy_exists = fs_exists "test_fs_copy.txt"
-
-fs_createdir "test_dir"
-fs_writefile "test_dir/file1.txt" "f1" false
-fs_writefile "test_dir/file2.txt" "f2" false
-
-declare listed = fs_list "test_dir"
-
-fs_deletefile $myfile
-fs_deletefile "test_fs_renamed.txt"
-fs_deletedir "test_dir"
-
-out "Content: $content"
-out "Exists: $exists"
-out "Is Array: $is_array"
-out "Copy Exists: $copy_exists"
-out "Rename Exists: $rename_exists"
-out "Orig Copy Exists (should be false): $orig_copy_exists"
-out "Listed: $listed"

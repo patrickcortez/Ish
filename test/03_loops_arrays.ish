@@ -1,31 +1,37 @@
-out "--- Starting Test 03: Loops & Arrays ---"
-
-let my_array = [ "apple", "banana", "cherry", "date", "elderberry" ]
-
-out "Array created. First element is: $my_array[0]"
-out "Third element is: $my_array[2]"
-
-out "Iterating through array using foreach loop with skip:"
-
-foreach fruit in $my_array {
-    if ( $fruit == "cherry" ) {
-        out "Skipping cherry..."
-        continue
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 03: Loops & Arrays ---"
+        
+        let my_array = [ "apple", "banana", "cherry", "date", "elderberry" ]
+        
+        out "Array created. First element is: $my_array[0]"
+        out "Third element is: $my_array[2]"
+        
+        out "Iterating through array using foreach loop with skip:"
+        
+        foreach fruit in $my_array {
+            if ( $fruit == "cherry" ) {
+                out "Skipping cherry..."
+                continue
+            }
+            
+            if ( $fruit == "date" ) {
+                out "Breaking out early at date!"
+                break
+            }
+            
+            out "Processed: $fruit"
+        }
+        
+        out "Iterating through standard for loop:"
+        let i = 0
+        while ( $i < 3 ) {
+            out "For iteration: $i"
+            i = "$(( $i + 1 ))"
+        }
+        
+        out "--- Test 03 Completed ---"
+        
+        return 0
     }
-    
-    if ( $fruit == "date" ) {
-        out "Breaking out early at date!"
-        break
-    }
-    
-    out "Processed: $fruit"
 }
-
-out "Iterating through standard for loop:"
-let i = 0
-while ( $i < 3 ) {
-    out "For iteration: $i"
-    i = "$(( $i + 1 ))"
-}
-
-out "--- Test 03 Completed ---"

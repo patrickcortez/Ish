@@ -1,16 +1,22 @@
-out "--- Starting Test 01: Basics ---"
-
-declare user="Cortez"
-declare greeting="Welcome to Ish, $user !"
-out $greeting
-
-out "Current directory contents:"
-show
-
-out "Creating a test directory..."
-create -d test_dir
-
-out "Removing test directory..."
-irm test_dir
-
-out "--- Test 01 Completed ---"
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 01: Basics ---"
+        
+        declare user="Cortez"
+        declare greeting="Welcome to Ish, $user !"
+        out $greeting
+        
+        out "Current directory contents:"
+        show
+        
+        out "Creating a test directory..."
+        create -d test_dir
+        
+        out "Removing test directory..."
+        irm test_dir
+        
+        out "--- Test 01 Completed ---"
+        
+        return 0
+    }
+}

@@ -1,13 +1,19 @@
-fn validate_config() {
-    out "ENTERED validate_config"
-    out "Checking..."
-    if ( $config[mode] == "production" ) {
-        out "Production mode verified."
-        return "SUCCESS"
-    } else {
-        out "Development mode detected."
-        return "DEV_MODE"
+public static class Program {
+    public static func main() {
+        fn validate_config() {
+            out "ENTERED validate_config"
+            out "Checking..."
+            if ( $config[mode] == "production" ) {
+                out "Production mode verified."
+                return "SUCCESS"
+            } else {
+                out "Development mode detected."
+                return "DEV_MODE"
+            }
+        }
+        let config = Map("mode", "production", )
+        validate_config
+        
+        return 0
     }
 }
-let config = Map("mode", "production", )
-validate_config

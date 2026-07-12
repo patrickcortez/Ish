@@ -1,19 +1,25 @@
-declare os = os_os
-declare arch = os_arch
-declare plat = os_platform
-declare hostname = os_hostname
-declare ver = os_version
-
-out "OS: $os"
-out "Arch: $arch"
-out "Platform: $plat"
-out "Hostname: $hostname"
-out "Version: $ver"
-
-os_setenvvar "MY_ISH_TEST" "HelloEnv"
-declare env_var = os_getenvvar "MY_ISH_TEST"
-out "Env var MY_ISH_TEST: $env_var"
-
-out "Sleeping 500ms..."
-os_sleep 500
-out "Woke up!"
+public static class Program {
+    public static func main() {
+        declare os = os_os
+        declare arch = os_arch
+        declare plat = os_platform
+        declare hostname = os_hostname
+        declare ver = os_version
+        
+        out "OS: $os"
+        out "Arch: $arch"
+        out "Platform: $plat"
+        out "Hostname: $hostname"
+        out "Version: $ver"
+        
+        os_setenvvar "MY_ISH_TEST" "HelloEnv"
+        declare env_var = os_getenvvar "MY_ISH_TEST"
+        out "Env var MY_ISH_TEST: $env_var"
+        
+        out "Sleeping 500ms..."
+        os_sleep 500
+        out "Woke up!"
+        
+        return 0
+    }
+}

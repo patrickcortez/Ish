@@ -1,14 +1,20 @@
-out "--- Starting Test 07: OS Interceptor (Hybrid) ---"
-
-out "Writing sample data..."
-out "error: this is a bad line" to test_hybrid.txt
-out "info: this is a good line" append to test_hybrid.txt
-out "error: this is another bad line" append to test_hybrid.txt
-
-out "Running OS Intercepted grep for 'error':"
-grep "error" test_hybrid.txt
-
-out "Cleaning up..."
-powershell -c "Remove-Item test_hybrid.txt"
-
-out "--- Test 07 Completed ---"
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 07: OS Interceptor (Hybrid) ---"
+        
+        out "Writing sample data..."
+        out "error: this is a bad line" to test_hybrid.txt
+        out "info: this is a good line" append to test_hybrid.txt
+        out "error: this is another bad line" append to test_hybrid.txt
+        
+        out "Running OS Intercepted grep for 'error':"
+        grep "error" test_hybrid.txt
+        
+        out "Cleaning up..."
+        powershell -c "Remove-Item test_hybrid.txt"
+        
+        out "--- Test 07 Completed ---"
+        
+        return 0
+    }
+}

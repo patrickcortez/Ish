@@ -1,27 +1,33 @@
-out "--- Starting Test 05: Complex Pipelines & Async ---"
-
-out "Creating temporary script file..."
-out "out Working_Hard" to temp_task.ish
-
-out "Running task in background..."
-ish temp_task.ish job
-
-out "Pipeline data routing test:"
-let pipe_result = out "Pipeline Initial Data" : out "Pipeline Processed Data"
-out "Piped command output was captured: $pipe_result"
-
-
-
-let target_iterations = expr 20 / 4
-
-out "Running parallel loop..."
-let i = 0
-while ( $i < $target_iterations ) {
-    out "Main Thread Iteration: $i" while out "Parallel Thread Iteration: $i"
-    let i = expr $i + 1
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 05: Complex Pipelines & Async ---"
+        
+        out "Creating temporary script file..."
+        out "out Working_Hard" to temp_task.ish
+        
+        out "Running task in background..."
+        ish temp_task.ish job
+        
+        out "Pipeline data routing test:"
+        let pipe_result = out "Pipeline Initial Data" : out "Pipeline Processed Data"
+        out "Piped command output was captured: $pipe_result"
+        
+        
+        
+        let target_iterations = expr 20 / 4
+        
+        out "Running parallel loop..."
+        let i = 0
+        while ( $i < $target_iterations ) {
+            out "Main Thread Iteration: $i" while out "Parallel Thread Iteration: $i"
+            let i = expr $i + 1
+        }
+        
+        out "--- Test 05 Completed ---"
+        
+        out "Cleaning up temporary file..."
+        irm temp_task.ish
+        
+        return 0
+    }
 }
-
-out "--- Test 05 Completed ---"
-
-out "Cleaning up temporary file..."
-irm temp_task.ish

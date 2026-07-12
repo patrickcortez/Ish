@@ -1,3 +1,9 @@
-# Ish script test
-out "Hello from Ish headless script execution!"
-show
+public static class Program {
+    public static func main() {
+        # Ish script test
+        out "Hello from Ish headless script execution!"
+        show
+        
+        return 0
+    }
+}

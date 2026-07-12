@@ -1,21 +1,27 @@
-out "--- Starting Test 06: Job Control ---"
-
-out "Spawning a background job..."
-powershell -c "Start-Sleep -Seconds 3" job
-
-out "Listing active jobs:"
-jobs
-
-out "Bringing job 1 to foreground (wait)..."
-fg 1
-
-out "Listing active jobs again:"
-jobs
-
-out "Spawning another background job to kill..."
-powershell -c "Start-Sleep -Seconds 10" job
-
-out "Killing job 2..."
-kill 2
-
-out "--- Test 06 Completed ---"
+public static class Program {
+    public static func main() {
+        out "--- Starting Test 06: Job Control ---"
+        
+        out "Spawning a background job..."
+        powershell -c "Start-Sleep -Seconds 3" job
+        
+        out "Listing active jobs:"
+        jobs
+        
+        out "Bringing job 1 to foreground (wait)..."
+        fg 1
+        
+        out "Listing active jobs again:"
+        jobs
+        
+        out "Spawning another background job to kill..."
+        powershell -c "Start-Sleep -Seconds 10" job
+        
+        out "Killing job 2..."
+        kill 2
+        
+        out "--- Test 06 Completed ---"
+        
+        return 0
+    }
+}
