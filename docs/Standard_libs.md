@@ -105,23 +105,23 @@ Because these are built natively into the interpreter, you simply call them like
 
 ```bash
 # Capture native strings and ints seamlessly
-declare host = os_hostname
-declare len = str_len $host
+let host = "$(os_hostname)"
+let len = "$(str_len $host)"
 out "Host $host is $len characters long"
 ```
 
 ## User Libraries
 
-You can load your own `.ish` scripts into the current environment using the `with` keyword. This merges their function definitions (`fn`) into the global scope.
+You can load your own `.ish` scripts into the current environment using the `with` keyword. This merges their function definitions (`func`) into the global scope.
 
 ```bash
 # Inside sample_lib.ish
-fn sample_hello() {
+func sample_hello() {
     out "Hello from the library!"
 }
 
-fn sample_returner(val) {
-    return out $val
+func sample_returner(val) {
+    return $val
 }
 ```
 
@@ -129,9 +129,9 @@ fn sample_returner(val) {
 # Inside main.ish
 with sample_lib.ish
 
-fn func() {
+func main() {
     sample_hello
-    declare x = sample_returner 22
+    let x = "$(sample_returner 22)"
     out "The value is $x"
 }
 ```

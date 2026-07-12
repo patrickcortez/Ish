@@ -4,8 +4,11 @@ The Ish shell is built around a custom AST parsing engine and comes with its own
 
 ## Table of Contents
 - [Core Syntax](#core-syntax)
+- [Variables & Scoping](#variables--scoping)
 - [Data Structures](#data-structures)
+- [Math & Subshells](#math--subshells)
 - [Control Flow](#control-flow)
+- [Functions & Returns](#functions--returns)
 - [Built-In Commands](#built-in-commands)
 
 ## Core Syntax
@@ -68,15 +71,38 @@ Ish uses the `while` operator to run the left node in the background simultaneou
 
 Ish internally supports strong typing with `Int`, `Float`, `Bool`, and `Null` values, alongside native strings.
 
-### Variables and Strict Declaration
-Ish uses strict variable declarations. You **must** declare a new variable using the `declare` keyword. Attempting to mutate an undeclared variable throws a runtime execution error.
+## Variables & Scoping
+
+Ish enforces strict variable management via the `let` keyword. 
+
+### Strict Declaration
+You **must** declare a new variable before assigning to it. Uninitialized variables or mutating undeclared variables will throw execution errors.
 
 ```bash
-declare name = "IshShell"
-declare count = 10
+let name = "IshShell"
+let count = 10
 out "Running: $name"
 
 count = 20  # Valid mutation
+```
+
+### Variable Scoping
+Ish follows a block-scoped lifetime architecture:
+- **Global Variables**: Declared at the root file level and accessible anywhere.
+- **Local Variables**: Declared inside `if`, `while`, `for`, `foreach` blocks or `func` scopes. They are destroyed when the block ends.
+
+> [!WARNING]
+> Attempting to use a local variable outside its parent block will result in a **Linter Error**.
+
+```bash
+let global_var = "Visible everywhere"
+
+if ( true ) {
+    let local_var = "Only exists here"
+    out $global_var   # Works!
+}
+
+out $local_var  # Error: Variable not defined!
 ```
 
 ### Arrays & Maps
@@ -85,23 +111,34 @@ Ish is fully Turing-complete with first-class data structure support that native
 **Arrays**:
 Initialize natively using square brackets:
 ```bash
-declare my_arr = [ "apple", "banana", "cherry" ]
+let my_arr = [ "apple", "banana", "cherry" ]
 out "First item: $my_arr[0]"
 ```
 
 **Maps**:
 Initialize maps natively using the `Map` constructor keyword:
 ```bash
-declare my_map = Map("name", "Ish", "version", "1.0")
+let my_map = Map("name", "Ish", "version", "1.0")
 out "Shell Name: $my_map[name]"
 ```
 
+## Math & Subshells
+
 ### Automatic Math Expressions
-Ish evaluates math expressions automatically using bodmas-compliant logic natively inside the AST.
+Ish evaluates math expressions automatically using bodmas-compliant logic inside the `$(( ... ))` expansion syntax.
+
 ```bash
-declare x = 5 + 10 * 2
-declare y = $x / 2.5
+let x = "$(( 5 + 10 * 2 ))"
+let y = "$(( $x / 2.5 ))"
 out $y
+```
+
+### Subshells
+You can execute and capture the output of commands or blocks natively using the `$( ... )` expansion syntax.
+
+```bash
+let files = "$(show .)"
+out "Found files: $files"
 ```
 
 **State Variables**:
@@ -146,10 +183,30 @@ try {
 }
 ```
 
+## Functions & Returns
+
+Functions allow you to encapsulate logic securely using the `func` keyword. Variables declared within a function are entirely isolated.
+
+### Strict Returns
+To enforce maintainable programming rules, the `return` statement has strict behavioral validation:
+1. You can only return **raw values** (like `"hello"`, `5`) or **variables** (`$my_var`).
+2. You **cannot** return commands directly. Expressions like `return out hello` will throw a linter error.
+3. Subshells are permitted during a return statement **only if they yield a valid value**.
+
+```bash
+func calculate_sum(a, b) {
+    let sum = "$(( $a + $b ))"
+    return $sum
+}
+
+let result = calculate_sum(10, 20)
+out "The sum is: $result"
+```
+
 ## Built-In Commands
 - `change <path>`: Change the current working directory.
 - `quit`: Exit the shell script / REPL.
-- `declare <var> = <val>`: Explicitly declare a variable.
+- `let <var> = <val>`: Explicitly declare a variable.
 - `out <text>`: Print to standard output.
 - `cwd`: Print current working directory.
 - `show [path]`: List directory contents natively mapped to an `IshValue::Array`.

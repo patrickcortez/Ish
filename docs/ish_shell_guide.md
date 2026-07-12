@@ -45,7 +45,7 @@ Ish handles normal OS commands natively, but also provides internal built-ins:
 
 - `change <path>`: Changes the current working directory.
 - `quit`: Gracefully terminates the shell.
-- `declare [var=value]`: Sets or views environment variables.
+- `let <var> = <val>`: Explicitly declares a local or global variable.
 - `out <text>`: Prints text to standard output.
 - `cwd`: Prints the current working directory.
 - `show [path]`: Lists directory contents natively as structured tabular objects.
