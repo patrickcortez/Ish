@@ -43,6 +43,17 @@ pub enum TokenKind {
     Continue,
     Try,
     Catch,
+    
+    // OOP Keywords
+    Class,
+    Struct,
+    Namespace,
+    Public,
+    Private,
+    Protected,
+    Internal,
+    Static,
+    New,
 
     // Symbols
     LBrace,         // {
@@ -299,12 +310,21 @@ impl Tokenizer {
                             "foreach" => TokenKind::Foreach,
                             "declare" => TokenKind::Declare,
                             "let" => TokenKind::Let,
-                            "fn" => TokenKind::Function,
+                            "fn" | "func" => TokenKind::Function,
                             "return" => TokenKind::Return,
                             "break" => TokenKind::Break,
                             "continue" => TokenKind::Continue,
                             "try" => TokenKind::Try,
                             "catch" => TokenKind::Catch,
+                            "class" => TokenKind::Class,
+                            "struct" => TokenKind::Struct,
+                            "namespace" => TokenKind::Namespace,
+                            "public" => TokenKind::Public,
+                            "private" => TokenKind::Private,
+                            "protected" => TokenKind::Protected,
+                            "internal" => TokenKind::Internal,
+                            "static" => TokenKind::Static,
+                            "new" => TokenKind::New,
                             _ => TokenKind::Word(word),
                         }
                     }

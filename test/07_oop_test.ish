@@ -1,0 +1,18 @@
+namespace App {
+    public class Greeter {
+        public func greet(name) {
+            out "Hello, $name!"
+            return 0
+        }
+    }
+
+    public static class Program {
+        public static func main() {
+            out "=== OOP Test ==="
+            let $greeter = new Greeter()
+            $greeter.greet("World")
+            out "=== Done ==="
+            return 0
+        }
+    }
+}

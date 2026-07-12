@@ -218,7 +218,7 @@ impl Linter {
                     }
                 }
             }
-            AstNodeKind::Function { name, params, body } => {
+            AstNodeKind::Function { name, params, body, .. } => {
                 if name.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Function defined without a name", node.line, node.column)));
                 }
@@ -291,6 +291,39 @@ impl Linter {
                 for (_, val) in items {
                     self.check_node(val)?;
                 }
+            }
+            // ---- OOP Nodes ----
+            AstNodeKind::NamespaceDecl { body, .. } => {
+                for stmt in body {
+                    self.check_node(stmt)?;
+                }
+            }
+            AstNodeKind::ClassDecl { methods, fields, .. } => {
+                for method in methods {
+                    self.check_node(method)?;
+                }
+                for field in fields {
+                    self.check_node(field)?;
+                }
+            }
+            AstNodeKind::StructDecl { fields, .. } => {
+                for field in fields {
+                    self.check_node(field)?;
+                }
+            }
+            AstNodeKind::ObjectInstantiation { args, .. } => {
+                for arg in args {
+                    self.check_node(arg)?;
+                }
+            }
+            AstNodeKind::MethodCall { object, args, .. } => {
+                self.check_node(object)?;
+                for arg in args {
+                    self.check_node(arg)?;
+                }
+            }
+            AstNodeKind::PropertyAccess { object, .. } => {
+                self.check_node(object)?;
             }
         }
         Ok(())

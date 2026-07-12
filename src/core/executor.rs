@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::collections::HashMap;
 use crate::core::stdlib::{StdlibProvider, IshStr, IshFS, IshTime, IshNet, IshOS};
+use crate::core::registry::Registry;
 use crate::managers::job_controller::JobController;
 
 pub struct Executor {
@@ -18,6 +19,9 @@ pub struct Executor {
     pub breaking: bool,
     pub continuing: bool,
     pub stdlib_providers: Vec<Box<dyn StdlibProvider>>,
+    pub registry: Registry,
+    /// Tracks which class context we are currently executing within (for access checks).
+    pub current_class: Option<String>,
 }
 
 impl Executor {
@@ -33,6 +37,8 @@ impl Executor {
             breaking: false,
             continuing: false,
             stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS), Box::new(IshTime), Box::new(IshNet), Box::new(IshOS)],
+            registry: Registry::new(),
+            current_class: None,
         }
     }
 
@@ -393,6 +399,62 @@ impl Executor {
 
     pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<bool, IshError> 
     {
+        // First pass: register all OOP declarations (namespaces, classes, structs)
+        self.registry.register_declarations(ast)?;
+
+        // If OOP declarations were found, look for the Program::main entry point
+        if !self.registry.classes.is_empty() {
+            // Check for entry point; if found, execute it
+            match self.registry.find_entry_point() {
+                Ok(program_class_name) => {
+                    // First, execute all declarations so methods get registered in self.functions
+                    self.execute_node_with_input(ast, "", None, jobs)?;
+
+                    // Now invoke Program::main
+                    let class_def = self.registry.resolve_class("Program").cloned()
+                        .ok_or_else(|| IshError::ExecutionError(
+                            "Internal error: Program class disappeared after registration.".to_string()
+                        ))?;
+
+                    let main_method = class_def.methods.get("main")
+                        .ok_or_else(|| IshError::ExecutionError(
+                            "Internal error: main method disappeared after registration.".to_string()
+                        ))?;
+
+                    self.variables.push(HashMap::new());
+                    self.function_bases.push(self.variables.len() - 1);
+                    let prev_class = self.current_class.clone();
+                    self.current_class = Some(program_class_name);
+
+                    let mut success = true;
+                    for stmt in &main_method.body {
+                        success = self.execute_node_with_input(stmt, "", None, jobs)?;
+                        if self.returning { break; }
+                    }
+
+                    // Retrieve return value (exit code)
+                    let ret_val = self.return_value.take();
+                    self.returning = false;
+                    self.function_bases.pop();
+                    self.variables.pop();
+                    self.current_class = prev_class;
+
+                    if let Some(IshValue::Int(code)) = ret_val {
+                        self.last_exit_code = code;
+                    }
+
+                    return Ok(success);
+                }
+                Err(_) => {
+                    // Classes exist but no Program::main — this is an error for OOP scripts
+                    return Err(IshError::ParseError(
+                        "OOP declarations found but no valid entry point. Scripts with class/struct declarations must contain a 'public static class Program' with a 'public static func main()' method.".to_string()
+                    ));
+                }
+            }
+        }
+
+        // No OOP declarations: execute normally (legacy/scripting mode)
         self.execute_node_with_input(ast, "", None, jobs)
     }
 
@@ -1193,7 +1255,7 @@ impl Executor {
                 self.continuing = true;
                 Ok(true)
             }
-            AstNodeKind::Function { name, params: _, body: _ } => {
+            AstNodeKind::Function { name, .. } => {
                 self.functions.insert(name.clone(), node.clone());
                 Ok(true)
             }
@@ -1229,6 +1291,8 @@ impl Executor {
                     breaking: false,
                     continuing: false,
                     stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
+                    registry: self.registry.clone(),
+                    current_class: self.current_class.clone(),
                 };
                 let mut exec_right = Executor {
                     script_args: self.script_args.clone(),
@@ -1241,6 +1305,8 @@ impl Executor {
                     breaking: false,
                     continuing: false,
                     stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
+                    registry: self.registry.clone(),
+                    current_class: self.current_class.clone(),
                 };
                 let left_node = left.clone();
                 let right_node = right.clone();
@@ -1259,6 +1325,231 @@ impl Executor {
                 
                 Ok(s1 && s2)
             }
+
+            // ---- OOP: Namespace, Class, Struct Declarations ----
+            // These are handled during first-pass registration; at execution time
+            // we simply recurse into the body so inner functions/statements register normally.
+            AstNodeKind::NamespaceDecl { body, .. } => {
+                for stmt in body {
+                    self.execute_node_with_input(stmt, input, out_file, jobs)?;
+                    if self.returning || self.breaking || self.continuing { break; }
+                }
+                Ok(true)
+            }
+            AstNodeKind::ClassDecl { name, methods, .. } => {
+                // Register methods as qualified functions (ClassName::method_name)
+                for method_node in methods {
+                    if let AstNodeKind::Function { name: mname, .. } = &method_node.kind {
+                        let qualified = format!("{}::{}", name, mname);
+                        self.functions.insert(qualified, method_node.clone());
+                    }
+                }
+                Ok(true)
+            }
+            AstNodeKind::StructDecl { .. } => {
+                // Struct definitions are fully handled by the registry first-pass
+                Ok(true)
+            }
+
+            // ---- OOP: Object Instantiation ----
+            AstNodeKind::ObjectInstantiation { class_name, args } => {
+                let class_def = self.registry.resolve_class(class_name).cloned()
+                    .ok_or_else(|| IshError::ExecutionError(format!(
+                        "Class '{}' is not defined.", class_name
+                    )))?;
+
+                if class_def.is_static {
+                    return Err(IshError::ExecutionError(format!(
+                        "Cannot instantiate static class '{}'.", class_name
+                    )));
+                }
+
+                // Check access
+                Registry::check_access(&class_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+
+                // Build default properties from field definitions
+                let mut properties = HashMap::new();
+                for (fname, fdef) in &class_def.fields {
+                    let val = if let Some(default_node) = &fdef.default_value {
+                        self.evaluate_node(default_node, jobs)?
+                    } else {
+                        IshValue::Null
+                    };
+                    properties.insert(fname.clone(), val);
+                }
+
+                // If there's a constructor, call it with the provided args
+                let mut eval_args = Vec::new();
+                for arg_node in args {
+                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                }
+
+                if let Some(constructor) = class_def.methods.get(class_name) {
+                    // Push a scope for constructor execution
+                    self.variables.push(HashMap::new());
+                    self.function_bases.push(self.variables.len() - 1);
+                    if let Some(scope) = self.variables.last_mut() {
+                        // Bind `this` as properties map
+                        scope.insert("this".to_string(), IshValue::Object {
+                            class_name: class_name.clone(),
+                            properties: properties.clone(),
+                        });
+                        for (i, param) in constructor.params.iter().enumerate() {
+                            if i < eval_args.len() {
+                                scope.insert(param.clone(), eval_args[i].clone());
+                            }
+                        }
+                    }
+                    let prev_class = self.current_class.clone();
+                    self.current_class = Some(class_def.qualified_name.clone());
+                    for stmt in &constructor.body {
+                        self.execute_node_with_input(stmt, "", None, jobs)?;
+                        if self.returning { break; }
+                    }
+                    // Extract potentially-modified `this`
+                    if let Some(scope) = self.variables.last() {
+                        if let Some(IshValue::Object { properties: p, .. }) = scope.get("this") {
+                            properties = p.clone();
+                        }
+                    }
+                    self.returning = false;
+                    self.function_bases.pop();
+                    self.variables.pop();
+                    self.current_class = prev_class;
+                }
+
+                self.return_value = Some(IshValue::Object {
+                    class_name: class_name.clone(),
+                    properties,
+                });
+                Ok(true)
+            }
+
+            // ---- OOP: Method Call ----
+            AstNodeKind::MethodCall { object, method_name, args } => {
+                let obj_val = self.evaluate_node(object, jobs)?;
+
+                match obj_val {
+                    IshValue::Object { ref class_name, .. } => {
+                        let class_def = self.registry.resolve_class(class_name).cloned()
+                            .ok_or_else(|| IshError::ExecutionError(format!(
+                                "Class '{}' is not defined (method call on object).", class_name
+                            )))?;
+
+                        let method = class_def.methods.get(method_name.as_str())
+                            .ok_or_else(|| IshError::ExecutionError(format!(
+                                "Method '{}' not found on class '{}'.", method_name, class_name
+                            )))?;
+
+                        // Check access specifier
+                        Registry::check_access(&method.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+
+                        // Evaluate arguments
+                        let mut eval_args = Vec::new();
+                        for arg_node in args {
+                            eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                        }
+
+                        // Push method scope
+                        self.variables.push(HashMap::new());
+                        self.function_bases.push(self.variables.len() - 1);
+                        if let Some(scope) = self.variables.last_mut() {
+                            scope.insert("this".to_string(), obj_val.clone());
+                            for (i, param) in method.params.iter().enumerate() {
+                                if i < eval_args.len() {
+                                    scope.insert(param.clone(), eval_args[i].clone());
+                                }
+                            }
+                        }
+
+                        let prev_class = self.current_class.clone();
+                        self.current_class = Some(class_def.qualified_name.clone());
+
+                        let mut success = true;
+                        for stmt in &method.body {
+                            success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            if self.returning { break; }
+                        }
+
+                        let ret_val = self.return_value.take();
+                        self.returning = false;
+                        self.function_bases.pop();
+                        self.variables.pop();
+                        self.current_class = prev_class;
+
+                        if let Some(val) = ret_val {
+                            let output = val.to_string();
+                            if let Some(path) = out_file {
+                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                let _ = file.write_all(output.as_bytes());
+                            } else if !output.is_empty() {
+                                print!("{}", output);
+                                let _ = std::io::stdout().flush();
+                            }
+                            self.return_value = Some(val);
+                        }
+
+                        self.last_exit_code = if success { 0 } else { 1 };
+                        Ok(success)
+                    }
+                    _ => {
+                        // For non-object values, try calling as a qualified static method (e.g. ClassName::method)
+                        Err(IshError::ExecutionError(format!(
+                            "Cannot call method '{}' on non-object value '{}'.", method_name, obj_val.to_string()
+                        )))
+                    }
+                }
+            }
+
+            // ---- OOP: Property Access ----
+            AstNodeKind::PropertyAccess { object, property_name } => {
+                let obj_val = self.evaluate_node(object, jobs)?;
+
+                match &obj_val {
+                    IshValue::Object { class_name, properties } => {
+                        // Check field access
+                        if let Some(class_def) = self.registry.resolve_class(class_name) {
+                            if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
+                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                            }
+                        }
+
+                        let val = properties.get(property_name.as_str())
+                            .cloned()
+                            .unwrap_or(IshValue::Null);
+
+                        let output = val.to_string();
+                        if let Some(path) = out_file {
+                            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                            let _ = file.write_all(output.as_bytes());
+                        } else if !output.is_empty() {
+                            print!("{}", output);
+                            let _ = std::io::stdout().flush();
+                        }
+                        self.return_value = Some(val);
+                        Ok(true)
+                    }
+                    IshValue::Map(m) => {
+                        let val = m.get(property_name.as_str())
+                            .cloned()
+                            .unwrap_or(IshValue::Null);
+                        let output = val.to_string();
+                        if let Some(path) = out_file {
+                            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                            let _ = file.write_all(output.as_bytes());
+                        } else if !output.is_empty() {
+                            print!("{}", output);
+                            let _ = std::io::stdout().flush();
+                        }
+                        self.return_value = Some(val);
+                        Ok(true)
+                    }
+                    _ => Err(IshError::ExecutionError(format!(
+                        "Cannot access property '{}' on non-object value '{}'.", property_name, obj_val.to_string()
+                    ))),
+                }
+            }
         }
     }
 }
+

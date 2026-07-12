@@ -9,6 +9,18 @@ pub enum IshValue {
     Null,
     Array(Vec<IshValue>),
     Map(HashMap<String, IshValue>),
+    Object {
+        class_name: String,
+        properties: HashMap<String, IshValue>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccessSpecifier {
+    Public,
+    Private,
+    Protected,
+    Internal,
 }
 
 impl IshValue {
@@ -32,6 +44,9 @@ impl IshValue {
                 let mut s: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v.to_string())).collect();
                 s.sort();
                 format!("{{{}}}", s.join(", "))
+            }
+            IshValue::Object { class_name, properties: _ } => {
+                format!("<Object {}>", class_name)
             }
         }
     }
@@ -147,6 +162,14 @@ impl Into<serde_json::Value> for IshValue {
                 }
                 serde_json::Value::Object(obj)
             }
+            IshValue::Object { class_name, properties } => {
+                let mut obj = serde_json::Map::new();
+                obj.insert("__class".to_string(), serde_json::Value::String(class_name));
+                for (k, val) in properties {
+                    obj.insert(k, val.into());
+                }
+                serde_json::Value::Object(obj)
+            }
         }
     }
 }
@@ -239,6 +262,8 @@ pub enum AstNodeKind {
         name: String,
         params: Vec<String>,
         body: Vec<AstNode>,
+        access: AccessSpecifier,
+        is_static: bool,
     },
 
     /// Try-Catch block
@@ -261,4 +286,45 @@ pub enum AstNodeKind {
     Array(Vec<AstNode>),
     
     Map(Vec<(String, AstNode)>),
+
+    /// OOP: Namespace Declaration
+    NamespaceDecl {
+        name: String,
+        body: Vec<AstNode>,
+    },
+
+    /// OOP: Class Declaration
+    ClassDecl {
+        name: String,
+        access: AccessSpecifier,
+        is_static: bool,
+        methods: Vec<AstNode>,
+        fields: Vec<AstNode>,
+    },
+
+    /// OOP: Struct Declaration
+    StructDecl {
+        name: String,
+        access: AccessSpecifier,
+        fields: Vec<AstNode>,
+    },
+
+    /// OOP: Object Instantiation (`new ClassName()`)
+    ObjectInstantiation {
+        class_name: String,
+        args: Vec<AstNode>,
+    },
+
+    /// OOP: Method Call (`$obj.method()`)
+    MethodCall {
+        object: Box<AstNode>,
+        method_name: String,
+        args: Vec<AstNode>,
+    },
+
+    /// OOP: Property Access (`$obj.field`)
+    PropertyAccess {
+        object: Box<AstNode>,
+        property_name: String,
+    },
 }

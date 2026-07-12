@@ -3,6 +3,7 @@ pub mod ast;
 pub mod parser;
 pub mod linter;
 pub mod executor;
+pub mod registry;
 pub mod utils;
 pub mod os_interceptor;
 pub mod stdlib;

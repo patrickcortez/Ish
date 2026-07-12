@@ -113,12 +113,26 @@ impl Parser {
                 TokenKind::If => self.parse_if_statement(),
                 TokenKind::For | TokenKind::Foreach => self.parse_for_loop(),
                 TokenKind::WhileAsync => self.parse_while_loop(),
-                TokenKind::Function => self.parse_function(),
+                TokenKind::Public | TokenKind::Private | TokenKind::Protected | TokenKind::Internal | TokenKind::Static => {
+                    self.parse_declaration()
+                }
+                TokenKind::Class | TokenKind::Struct | TokenKind::Function => {
+                    self.parse_declaration()
+                }
+                TokenKind::Namespace => self.parse_namespace(),
                 TokenKind::Return => {
                     let (line, col) = self.get_location();
-                    self.consume();
-                    let val = self.parse_expression()?;
-                    Ok(AstNode::new(AstNodeKind::Return(Box::new(val)), line, col))
+                    self.consume(); // Consume TokenKind::Return
+                    let value = if self.peek().is_some() 
+                        && !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBrace))
+                        && !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Semicolon))
+                        && !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Then))
+                    {
+                        self.parse_expression()?
+                    } else {
+                        AstNode::new(AstNodeKind::StringLiteral("null".to_string()), line, col)
+                    };
+                    Ok(AstNode::new(AstNodeKind::Return(Box::new(value)), line, col))
                 }
                 TokenKind::Break => {
                     let (line, col) = self.get_location();
@@ -129,10 +143,6 @@ impl Parser {
                     let (line, col) = self.get_location();
                     self.consume();
                     Ok(AstNode::new(AstNodeKind::Continue, line, col))
-                }
-                TokenKind::Declare | TokenKind::Let => {
-                    self.consume();
-                    self.parse_assignment(true, None)
                 }
                 TokenKind::Try => self.parse_try_catch_statement(),
                 TokenKind::Variable(_) | TokenKind::Word(_) => {
@@ -324,7 +334,137 @@ impl Parser {
         }, line, col))
     }
 
-    fn parse_function(&mut self) -> Result<AstNode, IshError> {
+    fn parse_namespace(&mut self) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Namespace
+        let name = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected namespace name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected namespace name".to_string())),
+        };
+        let body = self.parse_block()?;
+        Ok(AstNode::new(AstNodeKind::NamespaceDecl { name, body }, line, col))
+    }
+
+    fn parse_declaration(&mut self) -> Result<AstNode, IshError> {
+        use crate::core::ast::AccessSpecifier;
+        let mut access = AccessSpecifier::Internal; // default access
+        let mut is_static = false;
+        
+        while let Some(tok) = self.peek() {
+            match tok.kind {
+                TokenKind::Public => { access = AccessSpecifier::Public; self.consume(); }
+                TokenKind::Private => { access = AccessSpecifier::Private; self.consume(); }
+                TokenKind::Protected => { access = AccessSpecifier::Protected; self.consume(); }
+                TokenKind::Internal => { access = AccessSpecifier::Internal; self.consume(); }
+                TokenKind::Static => { is_static = true; self.consume(); }
+                _ => break,
+            }
+        }
+        
+        if let Some(tok) = self.peek() {
+            match tok.kind {
+                TokenKind::Class => self.parse_class(access, is_static),
+                TokenKind::Struct => self.parse_struct(access),
+                TokenKind::Function => self.parse_function(access, is_static),
+                _ => Err(IshError::ParseError("Expected class, struct, or function declaration after modifiers".to_string())),
+            }
+        } else {
+            Err(IshError::ParseError("Expected declaration after modifiers".to_string()))
+        }
+    }
+
+    fn parse_class(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Class
+        let name = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected class name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected class name".to_string())),
+        };
+
+        match self.consume() {
+            Some(tok) if matches!(tok.kind, TokenKind::LBrace) => {}
+            _ => return Err(IshError::ParseError("Expected '{' after class name".to_string())),
+        }
+        
+        let mut methods = Vec::new();
+        let mut fields = Vec::new();
+        
+        while let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::RBrace) {
+                self.consume();
+                break;
+            }
+            if matches!(tok.kind, TokenKind::Semicolon) {
+                self.consume();
+                continue;
+            }
+            // we expect methods or fields inside class
+            let decl = self.parse_declaration()?;
+            match decl.kind {
+                AstNodeKind::Function { .. } => methods.push(decl),
+                _ => fields.push(decl),
+            }
+        }
+
+        Ok(AstNode::new(AstNodeKind::ClassDecl { name, access, is_static, methods, fields }, line, col))
+    }
+
+    fn parse_struct(&mut self, access: crate::core::ast::AccessSpecifier) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Struct
+        let name = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected struct name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected struct name".to_string())),
+        };
+
+        match self.consume() {
+            Some(tok) if matches!(tok.kind, TokenKind::LBrace) => {}
+            _ => return Err(IshError::ParseError("Expected '{' after struct name".to_string())),
+        }
+        
+        let mut fields = Vec::new();
+        while let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::RBrace) {
+                self.consume();
+                break;
+            }
+            if matches!(tok.kind, TokenKind::Semicolon) {
+                self.consume();
+                continue;
+            }
+            // in a struct, maybe fields are declared with let
+            if matches!(tok.kind, TokenKind::Let) {
+                self.consume();
+                fields.push(self.parse_assignment(true, None)?);
+            } else if let TokenKind::Word(w) = &tok.kind {
+                let var_name = w.clone();
+                self.consume();
+                let is_decl = true;
+                let val = if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Assign)) {
+                    self.consume();
+                    self.parse_expression()?
+                } else {
+                    AstNode::new(AstNodeKind::StringLiteral("".to_string()), line, col)
+                };
+                fields.push(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(val), is_declaration: is_decl }, line, col));
+            } else {
+                return Err(IshError::ParseError("Expected field declaration in struct".to_string()));
+            }
+        }
+        
+        Ok(AstNode::new(AstNodeKind::StructDecl { name, access, fields }, line, col))
+    }
+
+    fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
         self.consume(); // Consume TokenKind::Function
         let name = match self.consume() {
@@ -360,7 +500,7 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(AstNode::new(AstNodeKind::Function { name, params, body }, line, col))
+        Ok(AstNode::new(AstNodeKind::Function { name, params, body, access, is_static }, line, col))
     }
 
     fn parse_block(&mut self) -> Result<Vec<AstNode>, IshError> {
@@ -416,6 +556,34 @@ impl Parser {
             if matches!(tok.kind, TokenKind::Declare) || matches!(tok.kind, TokenKind::Let) {
                 self.consume();
                 return self.parse_assignment(true, None);
+            }
+            if matches!(tok.kind, TokenKind::New) {
+                self.consume(); // Consume TokenKind::New
+                let class_name = match self.consume() {
+                    Some(tok) => match tok.kind {
+                        TokenKind::Word(w) => w,
+                        _ => return Err(IshError::ParseError("Expected class name after new".to_string())),
+                    },
+                    None => return Err(IshError::ParseError("Expected class name after new".to_string())),
+                };
+                
+                let mut args = Vec::new();
+                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                    self.consume();
+                    while let Some(tok) = self.peek() {
+                        if matches!(tok.kind, TokenKind::RParen) {
+                            self.consume();
+                            break;
+                        }
+                        if matches!(tok.kind, TokenKind::Comma) {
+                            self.consume();
+                            continue;
+                        }
+                        args.push(self.parse_pipeline()?);
+                    }
+                }
+                
+                return Ok(AstNode::new(AstNodeKind::ObjectInstantiation { class_name, args }, line, col));
             }
             if matches!(tok.kind, TokenKind::LBracket) {
                 self.consume();
@@ -486,10 +654,42 @@ impl Parser {
                     p
                 }
                 TokenKind::Variable(v) => {
-                    let p = format!("${}", v);
+                    let v = v.clone();
                     self.consume();
+                    if v.contains('.') {
+                        let parts: Vec<&str> = v.splitn(2, '.').collect();
+                        let obj_name = format!("${}", parts[0]);
+                        let member_name = parts[1].to_string();
+                        
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                            self.consume();
+                            let mut args = Vec::new();
+                            while let Some(tok) = self.peek() {
+                                if matches!(tok.kind, TokenKind::RParen) {
+                                    self.consume();
+                                    break;
+                                }
+                                if matches!(tok.kind, TokenKind::Comma) {
+                                    self.consume();
+                                    continue;
+                                }
+                                args.push(self.parse_pipeline()?);
+                            }
+                            return Ok(AstNode::new(AstNodeKind::MethodCall {
+                                object: Box::new(AstNode::new(AstNodeKind::StringLiteral(obj_name), line, col)),
+                                method_name: member_name,
+                                args
+                            }, line, col));
+                        } else {
+                            return Ok(AstNode::new(AstNodeKind::PropertyAccess {
+                                object: Box::new(AstNode::new(AstNodeKind::StringLiteral(obj_name), line, col)),
+                                property_name: member_name,
+                            }, line, col));
+                        }
+                    }
+                    
                     is_string_literal = true;
-                    p
+                    format!("${}", v)
                 }
                 TokenKind::Subshell(w) => {
                     let p = w.clone();
