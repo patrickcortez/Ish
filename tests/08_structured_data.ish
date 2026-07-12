@@ -1,0 +1,8 @@
+print Testing structured data in Ish...
+
+# 1. show command outputs IshValue::Array of Map
+declare files = show .
+
+# Test 2: The `show` output is structured.
+# we can just print it. The shell should render it as a table.
+show .

@@ -32,25 +32,98 @@ impl Executor {
         }
     }
 
-    fn resolve_var(&self, s: &str) -> Result<String, IshError> {
+    fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
         let mut result = String::new();
         let mut chars = s.chars().peekable();
         
         while let Some(c) = chars.next() {
             if c == '$' {
+                if chars.peek() == Some(&'(') {
+                    chars.next(); // consume '('
+                    if chars.peek() == Some(&'(') {
+                        chars.next(); // consume second '('
+                        let mut inner = String::new();
+                        let mut depth = 2;
+                        while let Some(ic) = chars.next() {
+                            if ic == '(' {
+                                depth += 1;
+                            } else if ic == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                } else if depth == 1 {
+                                    continue; // First ')' of '))'
+                                }
+                            }
+                            inner.push(ic);
+                        }
+                        if depth > 0 {
+                            return Err(IshError::ParseError("Unclosed math expansion `$((`".to_string()));
+                        }
+                        match crate::core::utils::eval_math(&inner) {
+                            Ok(val) => result.push_str(&val.to_string()),
+                            Err(e) => return Err(IshError::ExecutionError(format!("Math error: {}", e))),
+                        }
+                        continue;
+                    } else {
+                        // Subshell expansion
+                        let mut inner = String::new();
+                        let mut depth = 1;
+                        while let Some(ic) = chars.next() {
+                            if ic == '(' {
+                                depth += 1;
+                            } else if ic == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            inner.push(ic);
+                        }
+                        if depth > 0 {
+                            return Err(IshError::ParseError("Unclosed subshell `$(`".to_string()));
+                        }
+                        let mut tokenizer = crate::core::tokenizer::Tokenizer::new(&inner);
+                        if let Ok(tokens) = tokenizer.tokenize() {
+                            let mut parser = crate::core::parser::Parser::new(tokens);
+                            if let Ok(ast) = parser.parse() {
+                                let out = self.capture_output(&ast, jobs)?;
+                                result.push_str(&out);
+                            }
+                        }
+                        continue;
+                    }
+                }
+
                 let mut var_name = String::new();
-                while let Some(&nc) = chars.peek() {
-                    if nc.is_alphanumeric() || nc == '_' {
+                if let Some(&nc) = chars.peek() {
+                    if "?!@#$0".contains(nc) {
                         var_name.push(chars.next().unwrap());
                     } else {
-                        break;
+                        while let Some(&nc) = chars.peek() {
+                            if nc.is_alphanumeric() || nc == '_' {
+                                var_name.push(chars.next().unwrap());
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
                 
-                if var_name == "LAST" {
-                    result.push_str(&self.last_exit_code.to_string());
-                } else if var_name.is_empty() {
+                if var_name.is_empty() {
                     result.push('$');
+                } else if var_name == "?" || var_name == "LAST" {
+                    result.push_str(&self.last_exit_code.to_string());
+                } else if var_name == "$" {
+                    result.push_str(&std::process::id().to_string());
+                } else if var_name == "!" {
+                    result.push_str(&jobs.last_job_pid());
+                } else if var_name == "#" {
+                    result.push_str(&self.script_args.len().to_string());
+                } else if var_name == "@" {
+                    result.push_str(&self.script_args.join(" "));
+                } else if var_name == "0" {
+                    result.push_str("ish");
                 } else {
                     let mut found = false;
                     for scope in self.variables.iter().rev() {
@@ -85,6 +158,9 @@ impl Executor {
                             if idx > 0 && idx <= self.script_args.len() {
                                 result.push_str(&self.script_args[idx - 1]);
                                 found = true;
+                            } else {
+                                // For unbound positional arguments like $1 where args are empty
+                                found = true; 
                             }
                         }
                     }
@@ -133,9 +209,9 @@ impl Executor {
             Err(IshError::ExecutionError(e)) if e.starts_with("program not found: ") => {
                 let _ = std::fs::remove_file(&temp_path);
                 if let AstNodeKind::Command { program, args, .. } = &node.kind {
-                    let expected_err = format!("program not found: {}", self.resolve_var(program)?);
+                    let expected_err = format!("program not found: {}", self.resolve_var(program, jobs)?);
                     if e == expected_err && args.is_empty() {
-                        return Ok(self.resolve_var(program)?);
+                        return Ok(self.resolve_var(program, jobs)?);
                     }
                 }
                 Err(IshError::ExecutionError(e))
@@ -150,7 +226,7 @@ impl Executor {
     pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
             AstNodeKind::StringLiteral(s) => {
-                let resolved = self.resolve_var(s)?;
+                let resolved = self.resolve_var(s, jobs)?;
                 if let Ok(i) = resolved.parse::<i32>() {
                     Ok(IshValue::Int(i))
                 } else if let Ok(f) = resolved.parse::<f32>() {
@@ -165,32 +241,7 @@ impl Executor {
                     Ok(IshValue::String(resolved))
                 }
             }
-            AstNodeKind::BinaryOperation { left, operator, right } => {
-                let l_val = self.evaluate_node(left, jobs)?;
-                let r_val = self.evaluate_node(right, jobs)?;
-                
-                let (l_f, r_f) = match (&l_val, &r_val) {
-                    (IshValue::Int(i), IshValue::Int(j)) => return match operator.as_str() {
-                        "+" => Ok(IshValue::Int(i + j)),
-                        "-" => Ok(IshValue::Int(i - j)),
-                        "*" => Ok(IshValue::Int(i * j)),
-                        "/" => if *j == 0 { Err(IshError::ExecutionError("Division by zero".to_string())) } else { Ok(IshValue::Int(i / j)) },
-                        _ => Err(IshError::ExecutionError(format!("Unknown operator: {}", operator)))
-                    },
-                    (IshValue::Float(f1), IshValue::Float(f2)) => (*f1, *f2),
-                    (IshValue::Int(i), IshValue::Float(f)) => (*i as f32, *f),
-                    (IshValue::Float(f), IshValue::Int(i)) => (*f, *i as f32),
-                    _ => return Err(IshError::ExecutionError("Math operations require numerical types".to_string())),
-                };
 
-                match operator.as_str() {
-                    "+" => Ok(IshValue::Float(l_f + r_f)),
-                    "-" => Ok(IshValue::Float(l_f - r_f)),
-                    "*" => Ok(IshValue::Float(l_f * r_f)),
-                    "/" => Ok(IshValue::Float(l_f / r_f)),
-                    _ => Err(IshError::ExecutionError(format!("Unknown operator: {}", operator)))
-                }
-            }
             AstNodeKind::Condition { left, operator, right } => {
                 let left_val = self.evaluate_node(left, jobs)?;
                 let right_val = self.evaluate_node(right, jobs)?;
@@ -268,10 +319,10 @@ impl Executor {
     {
         match &node.kind {
             AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
-                let resolved_program = self.resolve_var(program)?;
+                let resolved_program = self.resolve_var(program, jobs)?;
                 let mut resolved_args = Vec::new();
                 for arg in args {
-                    resolved_args.push(self.resolve_var(arg)?);
+                    resolved_args.push(self.resolve_var(arg, jobs)?);
                 }
 
                 if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
@@ -338,13 +389,13 @@ impl Executor {
                 }
 
                 let mut internal_result = match final_program.as_str() {
-                    "jobs" => Ok(Some(jobs.list_jobs())),
+                    "jobs" => Ok(Some(crate::core::ast::IshValue::String(jobs.list_jobs()))),
                     "fg" => {
                         if final_args.is_empty() {
                             Err("fg error: expected job id".to_string())
                         } else if let Ok(id) = final_args[0].parse::<u32>() {
                             match jobs.wait_job(id) {
-                                Ok(msg) => Ok(Some(msg + "\n")),
+                                Ok(msg) => Ok(Some(crate::core::ast::IshValue::String(msg + "\n"))),
                                 Err(e) => Err(e),
                             }
                         } else {
@@ -356,7 +407,7 @@ impl Executor {
                             Err("kill error: expected job id".to_string())
                         } else if let Ok(id) = final_args[0].parse::<u32>() {
                             match jobs.kill_job(id) {
-                                Ok(msg) => Ok(Some(msg + "\n")),
+                                Ok(msg) => Ok(Some(crate::core::ast::IshValue::String(msg + "\n"))),
                                 Err(e) => Err(e),
                             }
                         } else {
@@ -368,29 +419,38 @@ impl Executor {
 
                 if let Ok(None) = internal_result {
                     if let Ok(Some(translated)) = crate::core::os_interceptor::translate_and_execute(&final_program, &final_args) {
-                        internal_result = Ok(Some(translated));
+                        internal_result = Ok(Some(crate::core::ast::IshValue::String(translated)));
                     }
                 }
 
                 match internal_result {
-                    Ok(Some(output)) => {
+                    Ok(Some(output_val)) => {
                         self.last_exit_code = 0;
                         if let Some(path) = out_file {
                             let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            let _ = file.write_all(output.as_bytes());
+                            let _ = file.write_all(output_val.to_string().as_bytes());
                         } else if let Some(path) = redirect_to {
                             if path != "DevNull" {
                                 let mut file = File::create(path)?;
-                                let _ = file.write_all(output.as_bytes());
+                                let _ = file.write_all(output_val.to_string().as_bytes());
                             }
                         } else if let Some(path) = append_to {
                             if path != "DevNull" {
                                 let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                let _ = file.write_all(output.as_bytes());
+                                let _ = file.write_all(output_val.to_string().as_bytes());
                             }
                         } else {
-                            print!("{}", output);
-                            let _ = std::io::stdout().flush();
+                            let output = output_val.to_string();
+                            if !output.trim().is_empty() {
+                                if let crate::core::ast::IshValue::Array(_) | crate::core::ast::IshValue::Map(_) = output_val {
+                                    // Structured output will be printed with its custom display
+                                    print!("{}", output);
+                                } else {
+                                    let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
+                                    print!("{}", out_str);
+                                }
+                                let _ = std::io::stdout().flush();
+                            }
                         }
                         return Ok(true);
                     }
@@ -516,16 +576,16 @@ impl Executor {
                 }
 
                 let mut previous_stdout: Option<std::process::ChildStdout> = None;
-                let mut internal_output: Option<String> = None;
+                let mut internal_output: Option<crate::core::ast::IshValue> = None;
                 let mut children = Vec::new();
                 let mut last_cmd_success = true;
 
                 for (i, node) in nodes.iter().enumerate() {
                     if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &node.kind {
-                        let resolved_program = self.resolve_var(program)?;
+                        let resolved_program = self.resolve_var(program, jobs)?;
                         let mut resolved_args = Vec::new();
                         for arg in args {
-                            resolved_args.push(self.resolve_var(arg)?);
+                            resolved_args.push(self.resolve_var(arg, jobs)?);
                         }
 
                         if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
@@ -564,7 +624,12 @@ impl Executor {
                                         self.last_exit_code = 0;
                                         last_cmd_success = true;
                                         if i < nodes.len() - 1 {
-                                            internal_output = Some(output);
+                                            // Handle Stdlib provider output strings by parsing them speculatively
+                                            let parsed = match serde_json::from_str::<serde_json::Value>(&output) {
+                                                Ok(v) => crate::core::ast::IshValue::from(v),
+                                                Err(_) => crate::core::ast::IshValue::String(output.clone()),
+                                            };
+                                            internal_output = Some(parsed);
                                             let _ = previous_stdout.take();
                                         } else {
                                             if let Some(path) = out_file {
@@ -596,23 +661,24 @@ impl Executor {
                         }
 
                         match crate::core::utils::execute_internal(&final_program, &final_args) {
-                            Ok(Some(output)) => {
+                            Ok(Some(output_val)) => {
                                 self.last_exit_code = 0;
                                 last_cmd_success = true;
                                 if i < nodes.len() - 1 {
-                                    internal_output = Some(output);
+                                    internal_output = Some(output_val);
                                     let _ = previous_stdout.take();
                                 } else {
+                                    let output_str = output_val.to_string();
                                     if let Some(path) = out_file {
                                         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                        let _ = file.write_all(output.as_bytes());
+                                        let _ = file.write_all(output_str.as_bytes());
                                     } else if let Some(path) = redirect_to {
                                         if path != "DevNull" {
                                             let mut file = File::create(path)?;
-                                            let _ = file.write_all(output.as_bytes());
+                                            let _ = file.write_all(output_str.as_bytes());
                                         }
                                     } else {
-                                        print!("{}", output);
+                                        print!("{}", output_str);
                                         let _ = std::io::stdout().flush();
                                     }
                                 }
@@ -621,7 +687,15 @@ impl Executor {
                             Err(e) => {
                                 self.last_exit_code = 1;
                                 last_cmd_success = false;
-                                eprintln!("{}", e);
+                                let err_msg = if *merge_err {
+                                    serde_json::to_string(&serde_json::json!({
+                                        "error": e,
+                                        "status": 1,
+                                    })).unwrap_or(e)
+                                } else {
+                                    e
+                                };
+                                eprintln!("{}", err_msg);
                                 break;
                             }
                             Ok(None) => {}
@@ -642,9 +716,9 @@ impl Executor {
                         } else if read_doc.is_some() {
                             let _ = previous_stdout.take(); // Discard piped input
                             cmd.stdin(Stdio::piped());
-                        } else if let Some(out) = internal_output.take() {
+                        } else if let Some(out_val) = internal_output.take() {
                             cmd.stdin(Stdio::piped());
-                            internal_output = Some(out); // put it back to write later
+                            internal_output = Some(out_val); // put it back to write later
                         } else if let Some(stdout) = previous_stdout.take() {
                             cmd.stdin(Stdio::from(stdout));
                         } else if i == 0 && !input.is_empty() {
@@ -696,15 +770,18 @@ impl Executor {
                             }
                         })?;
 
-                        if read_doc.is_some() {
-                            if let Some(doc) = read_doc {
-                                if let Some(mut stdin) = child.stdin.take() {
-                                    let _ = stdin.write_all(doc.as_bytes());
-                                }
-                            }
-                        } else if let Some(out) = internal_output.take() {
+                        if let Some(doc) = read_doc {
                             if let Some(mut stdin) = child.stdin.take() {
-                                let _ = stdin.write_all(out.as_bytes());
+                                let _ = stdin.write_all(doc.as_bytes());
+                            }
+                        } else if let Some(out_val) = internal_output.take() {
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let mut output_str = out_val.to_string();
+                                if let crate::core::ast::IshValue::Map(_) | crate::core::ast::IshValue::Array(_) = &out_val {
+                                    // if it's a native structure, serialize to json string
+                                    output_str = serde_json::to_string(&Into::<serde_json::Value>::into(out_val)).unwrap_or(output_str);
+                                }
+                                let _ = stdin.write_all(output_str.as_bytes());
                             }
                         } else if i == 0 && !input.is_empty() && previous_stdout.is_none() {
                             if let Some(mut stdin) = child.stdin.take() {
@@ -734,10 +811,10 @@ impl Executor {
             }
             AstNodeKind::Background(inner) => {
                 if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &inner.kind {
-                    let resolved_program = self.resolve_var(program)?;
+                    let resolved_program = self.resolve_var(program, jobs)?;
                     let mut resolved_args = Vec::new();
                     for arg in args {
-                        resolved_args.push(self.resolve_var(arg)?);
+                        resolved_args.push(self.resolve_var(arg, jobs)?);
                     }
                     if self.functions.contains_key(&resolved_program) {
                         return Err(IshError::ExecutionError("Cannot run custom functions in background via AstNodeKind::Background currently".into()));
@@ -864,18 +941,7 @@ impl Executor {
                 self.last_exit_code = if success { 0 } else { 1 };
                 Ok(success)
             }
-            AstNodeKind::BinaryOperation { .. } => {
-                let result = self.evaluate_node(node, jobs)?;
-                self.last_exit_code = 0;
-                use std::io::Write;
-                if let Some(path) = out_file {
-                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                    let _ = file.write_all(result.to_string().as_bytes());
-                } else {
-                    println!("{}", result.to_string());
-                }
-                Ok(true)
-            }
+
             AstNodeKind::Assignment { variable, value, is_declaration } => {
                 let val = match &value.kind {
                     AstNodeKind::Array(items) => {
@@ -1000,7 +1066,6 @@ impl Executor {
                             }
                         }
                         Err(e) => {
-                            success = false;
                             self.variables.pop(); // pop try block scope
                             
                             self.variables.push(HashMap::new()); // push catch block scope
@@ -1041,7 +1106,7 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::StringLiteral(s) => {
-                let resolved = self.resolve_var(s)?;
+                let resolved = self.resolve_var(s, jobs)?;
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
                     let _ = file.write_all(resolved.as_bytes());

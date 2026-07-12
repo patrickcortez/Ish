@@ -4,11 +4,14 @@ use std::path::Path;
 use std::process;
 use std::io::Write;
 
+use crate::core::ast::IshValue;
+use std::collections::HashMap;
+
 /// Tries to execute an internal command.
-/// Returns Ok(Some(output)) if it was an internal command and it succeeded.
+/// Returns Ok(Some(IshValue)) if it was an internal command and it succeeded.
 /// Returns Ok(None) if it is NOT an internal command.
 /// Returns Err(error_message) if it was an internal command but it failed.
-pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>, String> {
+pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<IshValue>, String> {
     match program {
         "change" => {
             let path = if args.is_empty() {
@@ -19,7 +22,7 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
             if let Err(e) = env::set_current_dir(&path) {
                 return Err(format!("change error: {}", e));
             }
-            Ok(Some(String::new()))
+            Ok(Some(IshValue::String(String::new())))
         }
         "quit" => {
             let code = if !args.is_empty() {
@@ -35,7 +38,7 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                 for (key, val) in env::vars() {
                     out.push_str(&format!("{}={}\n", key, val));
                 }
-                return Ok(Some(out));
+                return Ok(Some(IshValue::String(out)));
             }
             let mut i = 0;
             while i < args.len() {
@@ -58,31 +61,37 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                     i += 1;
                 }
             }
-            Ok(Some(String::new()))
+            Ok(Some(IshValue::String(String::new())))
         }
         "out" => {
-            Ok(Some(args.join(" ") + "\n"))
+            Ok(Some(IshValue::String(args.join(" ") + "\n")))
         }
         "cwd" => {
             match env::current_dir() {
-                Ok(dir) => Ok(Some(format!("{}\n", dir.display()))),
+                Ok(dir) => Ok(Some(IshValue::String(format!("{}\n", dir.display())))),
                 Err(e) => Err(format!("cwd error: {}", e)),
             }
         }
         "show" => {
             let dir = if args.is_empty() { "." } else { &args[0] };
-            let mut out = String::new();
+            let mut entries_arr = Vec::new();
             match fs::read_dir(dir) {
                 Ok(entries) => {
                     for entry in entries {
                         if let Ok(entry) = entry {
+                            let mut map = HashMap::new();
                             if let Ok(file_name) = entry.file_name().into_string() {
-                                out.push_str(&file_name);
-                                out.push('\n');
+                                map.insert("name".to_string(), IshValue::String(file_name));
                             }
+                            if let Ok(metadata) = entry.metadata() {
+                                map.insert("size".to_string(), IshValue::Int(metadata.len() as i32));
+                                map.insert("is_dir".to_string(), IshValue::Bool(metadata.is_dir()));
+                                map.insert("is_file".to_string(), IshValue::Bool(metadata.is_file()));
+                            }
+                            entries_arr.push(IshValue::Map(map));
                         }
                     }
-                    Ok(Some(out))
+                    Ok(Some(IshValue::Array(entries_arr)))
                 }
                 Err(e) => Err(format!("show error: {}", e)),
             }
@@ -100,10 +109,10 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                             out.push('\n');
                         }
                     }
-                    Err(e) => return Err(format!("read error on {}: {}", file, e)),
+                    Err(e) => return Err(format!("read error: {}", e)),
                 }
             }
-            Ok(Some(out))
+            Ok(Some(IshValue::String(out)))
         }
         "create" => {
             if args.is_empty() {
@@ -134,18 +143,18 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                     }
                 }
             }
-            Ok(Some(String::new()))
+            Ok(Some(IshValue::String(String::new())))
         }
         "input" => {
             if !args.is_empty() {
                 eprint!("{} ", args.join(" "));
                 let _ = std::io::stderr().flush();
             }
-            let mut buf = String::new();
-            if let Err(e) = std::io::stdin().read_line(&mut buf) {
-                return Err(format!("input error: {}", e));
+            let mut input = String::new();
+            if std::io::stdin().read_line(&mut input).is_err() {
+                return Err("Failed to read input".to_string());
             }
-            Ok(Some(buf.trim_end().to_string()))
+            Ok(Some(IshValue::String(input.trim_end_matches('\n').trim_end_matches('\r').to_string())))
         }
         "inputkey" => {
             use crossterm::event::{read, Event, KeyCode};
@@ -155,22 +164,19 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                 let _ = std::io::stderr().flush();
             }
             let _ = enable_raw_mode();
-            let mut key_str = String::new();
-            if let Ok(Event::Key(event)) = read() {
-                match event.code {
-                    KeyCode::Char(c) => key_str.push(c),
-                    KeyCode::Enter => key_str.push_str("Enter"),
-                    KeyCode::Esc => key_str.push_str("Esc"),
-                    KeyCode::Backspace => key_str.push_str("Backspace"),
-                    KeyCode::Up => key_str.push_str("Up"),
-                    KeyCode::Down => key_str.push_str("Down"),
-                    KeyCode::Left => key_str.push_str("Left"),
-                    KeyCode::Right => key_str.push_str("Right"),
-                    _ => key_str.push_str(&format!("{:?}", event.code)),
+            let result = match read() {
+                Ok(Event::Key(key_event)) => {
+                    let _ = std::io::stdout().flush();
+                    match key_event.code {
+                        KeyCode::Char(c) => Ok(Some(IshValue::String(c.to_string()))),
+                        KeyCode::Enter => Ok(Some(IshValue::String("\n".to_string()))),
+                        _ => Ok(Some(IshValue::String(String::from(" ")))),
+                    }
                 }
-            }
+                _ => Ok(Some(IshValue::String(String::from(" ")))),
+            };
             let _ = disable_raw_mode();
-            Ok(Some(key_str))
+            result
         }
         "irm" => {
             if args.is_empty() {
@@ -203,7 +209,7 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
                     }
                 }
             }
-            Ok(Some(String::new()))
+            Ok(Some(IshValue::String(String::new())))
         }
         "expr" => {
             if args.is_empty() {
@@ -211,7 +217,7 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<String>
             }
             let expr_str = args.join(" ");
             match eval_math(&expr_str) {
-                Ok(val) => Ok(Some(format!("{}\n", val))),
+                Ok(val) => Ok(Some(IshValue::String(format!("{}\n", val)))),
                 Err(e) => Err(format!("expr error: {}", e)),
             }
         }
@@ -239,13 +245,13 @@ Ish Built-in Commands:
   find <pattern>          - Find files (intercepted via OS)
   clear/cls               - Clear the screen (intercepted via OS)
 ";
-            Ok(Some(help_text.to_string()))
+            Ok(Some(crate::core::ast::IshValue::String(help_text.to_string())))
         }
         _ => Ok(None),
     }
 }
 
-fn eval_math(expr: &str) -> Result<f64, String> {
+pub fn eval_math(expr: &str) -> Result<f64, String> {
     let mut tokens = Vec::new();
     let mut current_num = String::new();
     

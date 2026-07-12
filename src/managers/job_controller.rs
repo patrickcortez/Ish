@@ -4,6 +4,7 @@ use std::collections::HashMap;
 pub struct JobController {
     jobs: HashMap<u32, Child>,
     next_job_id: u32,
+    pub last_spawned_pid: Option<u32>,
 }
 
 impl JobController {
@@ -11,14 +12,22 @@ impl JobController {
         Self {
             jobs: HashMap::new(),
             next_job_id: 1,
+            last_spawned_pid: None,
         }
     }
 
     pub fn add_job(&mut self, child: Child) -> u32 {
         let id = self.next_job_id;
+        self.last_spawned_pid = Some(child.id());
         self.jobs.insert(id, child);
         self.next_job_id += 1;
         id
+    }
+
+    pub fn last_job_pid(&self) -> String {
+        self.last_spawned_pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "".to_string())
     }
 
     pub fn list_jobs(&mut self) -> String {

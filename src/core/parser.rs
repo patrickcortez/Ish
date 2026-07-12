@@ -367,12 +367,12 @@ impl Parser {
 
     fn parse_pipeline(&mut self) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
-        let mut commands = vec![self.parse_math_expression()?];
+        let mut commands = vec![self.parse_command()?];
 
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::Pipe) {
                 self.consume(); // Consume ':'
-                commands.push(self.parse_math_expression()?);
+                commands.push(self.parse_command()?);
             } else {
                 break;
             }
@@ -383,29 +383,6 @@ impl Parser {
         } else {
             Ok(AstNode::new(AstNodeKind::Pipeline(commands), line, col))
         }
-    }
-
-    fn parse_math_expression(&mut self) -> Result<AstNode, IshError> {
-        let mut left = self.parse_command()?;
-        while let Some(tok) = self.peek() {
-            let op = match tok.kind {
-                TokenKind::Plus => "+",
-                TokenKind::Minus => "-",
-                TokenKind::Multiply => "*",
-                TokenKind::Divide => "/",
-                _ => break,
-            };
-            self.consume();
-            let right = self.parse_command()?;
-            let line = left.line;
-            let col = left.column;
-            left = AstNode::new(AstNodeKind::BinaryOperation {
-                left: Box::new(left),
-                operator: op.to_string(),
-                right: Box::new(right),
-            }, line, col);
-        }
-        Ok(left)
     }
 
     fn parse_command(&mut self) -> Result<AstNode, IshError> {

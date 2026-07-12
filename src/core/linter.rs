@@ -75,10 +75,7 @@ impl Linter {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
-            AstNodeKind::BinaryOperation { left, right, .. } => {
-                self.check_node(left)?;
-                self.check_node(right)?;
-            }
+
             AstNodeKind::Background(inner) => {
                 self.check_node(inner)?;
             }

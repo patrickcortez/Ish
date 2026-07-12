@@ -1,0 +1,21 @@
+# Test script for advanced variables, subshells, and math expansions
+
+out "Script args: $@"
+out "Arg count: $#"
+out "Arg 1: $1"
+out "Arg 2: $2"
+out "Arg 10: $10"
+out "Script name: $0"
+
+out "Process ID: $$"
+
+out "Math: $(( 5 + 5 * 2 ))"
+
+declare my_var = "world"
+out "Subshell: $(out hello $my_var)"
+
+out "Last Exit Code: $?"
+
+# Background job to test $!
+timeout 1 job
+out "Last Background PID: $!"

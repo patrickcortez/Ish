@@ -1,7 +1,7 @@
 fn func() {
-    num = 23
+    declare num = 23
     num = expr $num + 23
     return out $num
 }
-res = func
+declare res = func
 expr $res + 2

@@ -24,6 +24,9 @@ struct Args {
     /// Interactive shell (ignored, for compatibility)
     #[arg(short, long)]
     interactive: bool,
+
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    script_args: Vec<String>,
 }
 
 fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
@@ -66,7 +69,7 @@ fn main() -> ExitCode {
     } else if let Some(script_path) = args.script {
         match std::fs::read_to_string(&script_path) {
             Ok(content) => {
-                let mut executor = core::executor::Executor::new(vec![]); // Will pass real args later
+                let mut executor = core::executor::Executor::new(args.script_args);
                 let mut jobs = managers::job_controller::JobController::new();
                 if let Err(e) = execute_headless_command(&content, &mut executor, &mut jobs) {
                     eprintln!("Script execution failed: {}", e);

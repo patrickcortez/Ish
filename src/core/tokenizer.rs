@@ -25,10 +25,7 @@ pub enum TokenKind {
     LessThan,       // <
     GreaterOrEq,    // >=
     LessOrEq,       // <=
-    Plus,           // +
-    Minus,          // -
-    Multiply,       // *
-    Divide,         // /
+
 
     // Scripting keywords
     If,
@@ -102,6 +99,13 @@ impl Tokenizer {
                 break;
             }
 
+            if self.input[self.position] == '#' {
+                while self.position < self.input.len() && self.input[self.position] != '\n' {
+                    self.advance();
+                }
+                continue;
+            }
+
             let start_line = self.line;
             let start_column = self.column;
             let ch = self.input[self.position];
@@ -151,22 +155,7 @@ impl Tokenizer {
                     self.advance();
                     TokenKind::RBracket
                 }
-                '+' => {
-                    self.advance();
-                    TokenKind::Plus
-                }
-                '-' => {
-                    self.advance();
-                    TokenKind::Minus
-                }
-                '*' => {
-                    self.advance();
-                    TokenKind::Multiply
-                }
-                '/' => {
-                    self.advance();
-                    TokenKind::Divide
-                }
+
                 '\n' => {
                     self.advance();
                     TokenKind::Semicolon
@@ -317,7 +306,7 @@ impl Tokenizer {
         let mut word = String::new();
         while self.position < self.input.len() {
             let ch = self.input[self.position];
-            if ch.is_whitespace() || "{}()=,:\"'$!<>+-*/".contains(ch) {
+            if ch.is_whitespace() || "{}()=,:\"'$!<>".contains(ch) {
                 break;
             }
             word.push(ch);
