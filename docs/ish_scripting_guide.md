@@ -9,6 +9,7 @@ The Ish shell is built around a custom AST parsing engine and comes with its own
 - [Math & Subshells](#math--subshells)
 - [Control Flow](#control-flow)
 - [Functions & Returns](#functions--returns)
+- [Object-Oriented Programming (OOP)](#object-oriented-programming-oop)
 - [Built-In Commands](#built-in-commands)
 
 ## Core Syntax
@@ -201,6 +202,66 @@ func calculate_sum(a, b) {
 
 let result = calculate_sum(10, 20)
 out "The sum is: $result"
+```
+
+## Object-Oriented Programming (OOP)
+
+Ish is deeply OOP-centric and strictly enforces a C#-style structure for robust programming. 
+
+### Program Entry Point
+Every valid Ish script **must** define a `public static class Program` with a `public static func main()` method. When executing an Ish script, the `main` method is the starting point of execution.
+
+```bash
+public static class Program {
+    public static func main() {
+        out "Hello from the entry point!"
+        
+        let greeter = new Greeter()
+        greeter.say_hello("User")
+    }
+}
+```
+
+### Classes, Structs, and Namespaces
+You can organize your code using `namespace`, `class`, and `struct`.
+
+- **Namespace**: Used to logically group classes.
+- **Class**: Defines an object with methods and properties.
+- **Struct**: A lightweight data structure (behaves similarly to a class but typically used for pure data).
+
+```bash
+namespace Utilities {
+    public class Greeter {
+        public func say_hello(name) {
+            out "Hello, $name!"
+        }
+    }
+}
+```
+
+### Access Specifiers
+You can strictly control visibility using access specifiers:
+- `public`: Accessible from anywhere.
+- `private`: Accessible only within the declaring class.
+- `protected`: Accessible within the declaring class and its subclasses (future inheritance).
+
+### Static Members
+Methods and properties can be marked as `static`, meaning they belong to the class itself rather than an instance.
+
+```bash
+public class MathUtil {
+    public static func square(x) {
+        return "$(( $x * $x ))"
+    }
+}
+```
+
+### Object Instantiation
+To create an instance of a class, use the `new` keyword. You can access properties and methods using dot notation (`.`).
+
+```bash
+let my_obj = new Utilities::Greeter()
+my_obj.say_hello("World")
 ```
 
 ## Built-In Commands
