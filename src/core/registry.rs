@@ -11,6 +11,8 @@ pub struct ClassDef {
     pub is_static: bool,
     pub methods: HashMap<String, MethodDef>,
     pub fields: HashMap<String, FieldDef>,
+    pub constructor: Option<Vec<AstNode>>,
+    pub destructor: Option<Vec<AstNode>>,
 }
 
 /// Represents a registered struct definition in the Ish OOP system.
@@ -29,6 +31,7 @@ pub struct MethodDef {
     pub access: AccessSpecifier,
     pub is_static: bool,
     pub params: Vec<String>,
+    pub has_params: bool,
     pub body: Vec<AstNode>,
 }
 
@@ -40,16 +43,23 @@ pub struct FieldDef {
     pub default_value: Option<AstNode>,
 }
 
-/// The OOP registry that holds all namespace, class, and struct definitions.
-/// It is populated during the "first pass" of AST traversal before execution begins.
+use std::collections::HashSet;
+
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub qualified_name: String,
+    pub access: AccessSpecifier,
+    pub variants: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Registry {
-    /// Map of fully-qualified class name -> ClassDef (e.g. "MyNamespace::MyClass")
     pub classes: HashMap<String, ClassDef>,
-    /// Map of fully-qualified struct name -> StructDef
     pub structs: HashMap<String, StructDef>,
-    /// Tracks the current namespace prefix stack during registration
+    pub enums: HashMap<String, EnumDef>,
     namespace_stack: Vec<String>,
+    pub loaded_files: HashSet<String>,
 }
 
 impl Registry {
@@ -57,7 +67,9 @@ impl Registry {
         Self {
             classes: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             namespace_stack: Vec::new(),
+            loaded_files: HashSet::new(),
         }
     }
 
@@ -90,18 +102,19 @@ impl Registry {
                 }
                 self.namespace_stack.pop();
             }
-            AstNodeKind::ClassDecl { name, access, is_static, methods, fields } => {
+            AstNodeKind::ClassDecl { name, access, is_static, methods, fields, constructor, destructor } => {
                 let qualified_name = self.qualify_name(name);
                 let mut method_map = HashMap::new();
                 let mut field_map = HashMap::new();
 
                 for method_node in methods {
-                    if let AstNodeKind::Function { name: mname, params, body, access: maccess, is_static: mstatic } = &method_node.kind {
+                    if let AstNodeKind::Function { name: mname, params, has_params, body, access: maccess, is_static: mstatic } = &method_node.kind {
                         method_map.insert(mname.clone(), MethodDef {
                             name: mname.clone(),
                             access: maccess.clone(),
                             is_static: *mstatic,
                             params: params.clone(),
+                            has_params: *has_params,
                             body: body.clone(),
                         });
                     }
@@ -124,6 +137,8 @@ impl Registry {
                     is_static: *is_static,
                     methods: method_map,
                     fields: field_map,
+                    constructor: constructor.clone(),
+                    destructor: destructor.clone(),
                 });
             }
             AstNodeKind::StructDecl { name, access, fields } => {
@@ -146,6 +161,48 @@ impl Registry {
                     access: access.clone(),
                     fields: field_map,
                 });
+            }
+            AstNodeKind::EnumDecl { name, access, variants } => {
+                let qualified_name = if self.namespace_stack.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}::{}", self.current_namespace(), name)
+                };
+                self.enums.insert(name.clone(), EnumDef {
+                    name: name.clone(),
+                    qualified_name,
+                    access: access.clone(),
+                    variants: variants.clone(),
+                });
+            }
+            AstNodeKind::WithImport { path } => {
+                let file_path = path.replace(".", std::path::MAIN_SEPARATOR_STR) + ".ish";
+                let absolute_path = match std::env::current_dir() {
+                    Ok(cwd) => cwd.join(&file_path),
+                    Err(_) => std::path::PathBuf::from(&file_path),
+                };
+                
+                if absolute_path.exists() {
+                    let absolute_path_str = absolute_path.to_string_lossy().to_string();
+                    if self.loaded_files.insert(absolute_path_str.clone()) {
+                        if let Ok(content) = std::fs::read_to_string(&absolute_path) {
+                            let mut tokenizer = crate::core::tokenizer::Tokenizer::new(&content);
+                            if let Ok(tokens) = tokenizer.tokenize() {
+                                let mut parser = crate::core::parser::Parser::new(tokens);
+                                if let Ok(ast) = parser.parse() {
+                                    let namespace = if let Some(last_dot) = path.rfind('.') {
+                                        path[..last_dot].to_string() // "test.MyNamespace"
+                                    } else {
+                                        "".to_string()
+                                    };
+                                    self.namespace_stack.push(namespace);
+                                    let _ = self.register_declarations(&ast);
+                                    self.namespace_stack.pop();
+                                }
+                            }
+                        }
+                    }
+                }
             }
             // Recurse into other compound nodes that might contain declarations
             AstNodeKind::If { body, else_body, .. } => {
@@ -209,27 +266,32 @@ impl Registry {
                         "Entry point class '{}' must be declared as 'public'.", qn
                     )));
                 }
-                if let Some(main_method) = cls.methods.get("main") {
+                if let Some(main_method) = cls.methods.get("Main") {
                     if !main_method.is_static {
                         return Err(IshError::ParseError(
-                            "Entry point method 'main' must be declared as 'static'.".to_string()
+                            "Entry point method 'Main' must be declared as 'static'.".to_string()
                         ));
                     }
                     if !matches!(main_method.access, AccessSpecifier::Public) {
                         return Err(IshError::ParseError(
-                            "Entry point method 'main' must be declared as 'public'.".to_string()
+                            "Entry point method 'Main' must be declared as 'public'.".to_string()
+                        ));
+                    }
+                    if !main_method.has_params {
+                        return Err(IshError::ParseError(
+                            "Entry point method 'Main' must have the 'params let[] args' signature.".to_string()
                         ));
                     }
                     return Ok(qn.clone());
                 } else {
                     return Err(IshError::ParseError(format!(
-                        "Entry point class '{}' must contain a 'public static func main()' method.", qn
+                        "Entry point class '{}' must contain a 'public static func Main(params let[] args)' method.", qn
                     )));
                 }
             }
         }
         Err(IshError::ParseError(
-            "No entry point found. Scripts must contain a 'public static class Program' with a 'public static func main()' method.".to_string()
+            "No entry point found. Scripts must contain a 'public static class Program' with a 'public static func Main(params let[] args)' method.".to_string()
         ))
     }
 

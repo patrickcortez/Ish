@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         let name = input "What is your name?"
         out "Hello, $name!"
         let key = inputkey "Press any key to exit..."

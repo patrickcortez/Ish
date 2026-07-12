@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         out "--- Starting Test 01: Basics ---"
         
         declare user="Cortez"

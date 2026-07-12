@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         # Ish script test
         out "Hello from Ish headless script execution!"
         show

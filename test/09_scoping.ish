@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         declare global_var = "global"
         
         fn inner() {

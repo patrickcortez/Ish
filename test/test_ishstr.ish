@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         declare my_arr = [ "apple", "banana", "cherry" ]
         declare joined = str_join $my_arr "-"
         out "Joined: $joined"

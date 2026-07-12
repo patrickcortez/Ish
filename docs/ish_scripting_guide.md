@@ -110,10 +110,21 @@ out $local_var  # Error: Variable not defined!
 Ish is fully Turing-complete with first-class data structure support that natively maps to JSON!
 
 **Arrays**:
-Initialize natively using square brackets:
+Arrays in Ish are strictly immutable. Initialize them natively using the `let[]` keyword and square brackets:
 ```bash
-let my_arr = [ "apple", "banana", "cherry" ]
+let[] my_arr = [ "apple", "banana", "cherry" ]
 out "First item: $my_arr[0]"
+```
+
+**Lists**:
+Lists are the mutable equivalents to arrays. You can instantiate them using the `new` keyword and invoke built-in methods like `add`, `remove`, and `clear`. You can also mutate indexes directly:
+```bash
+let my_list = new List()
+my_list.add("apple")
+my_list.add("banana")
+my_list[1] = "blueberry"
+my_list.remove(0)
+my_list.clear()
 ```
 
 **Maps**:
@@ -208,26 +219,36 @@ out "The sum is: $result"
 
 Ish is deeply OOP-centric and strictly enforces a C#-style structure for robust programming. 
 
-### Program Entry Point
-Every valid Ish script **must** define a `public static class Program` with a `public static func main()` method. When executing an Ish script, the `main` method is the starting point of execution.
+### Program Entry Point & Top-Level Constraints
+Ish enforces extreme top-level strictness. **Absolutely no statements or variables can exist outside of a class, struct, enum, or with-import**.
+
+Every valid Ish script **must** define a `public static class Program` with a `public static int Main(params let[] args)` method. When executing an Ish script, this `Main` method is the starting point of execution.
 
 ```bash
 public static class Program {
-    public static func main() {
+    public static int Main(params let[] args) {
         out "Hello from the entry point!"
         
-        let greeter = new Greeter()
+        let greeter = new Utilities::Greeter()
         greeter.say_hello("User")
+        return 0
     }
 }
 ```
 
-### Classes, Structs, and Namespaces
-You can organize your code using `namespace`, `class`, and `struct`.
+### Classes, Structs, Enums, and Namespaces
+You can organize your code using `namespace`, `class`, `struct`, and `enum`.
 
 - **Namespace**: Used to logically group classes.
 - **Class**: Defines an object with methods and properties.
 - **Struct**: A lightweight data structure (behaves similarly to a class but typically used for pure data).
+- **Enum**: Strongly-typed named constants.
+
+### Importing Modules
+To use classes defined in other files or directories, use the `with` keyword followed by the dot-separated path to the script (which mirrors C#'s `using`).
+```bash
+with src.utils.MathUtils;
+```
 
 ```bash
 namespace Utilities {
@@ -243,21 +264,38 @@ namespace Utilities {
 You can strictly control visibility using access specifiers:
 - `public`: Accessible from anywhere.
 - `private`: Accessible only within the declaring class.
-- `protected`: Accessible within the declaring class and its subclasses (future inheritance).
+- `protected`: Accessible within the declaring class and its subclasses.
+- `internal`: Accessible within the same namespace.
 
-### Static Members
-Methods and properties can be marked as `static`, meaning they belong to the class itself rather than an instance.
+### Static Members & Classes
+Methods and properties can be marked as `static`, meaning they belong to the class itself rather than an instance. An entire class can also be declared as `static` ensuring it cannot be instantiated.
 
 ```bash
-public class MathUtil {
+public static class MathUtil {
     public static func square(x) {
         return "$(( $x * $x ))"
     }
 }
 ```
+You can call static methods using the class name natively without instantiating it:
+```bash
+MathUtil.square(10)
+```
+
+### Enums
+Enums allow you to define constant variants. They are accessed statically using dot notation:
+```bash
+public enum Status {
+    Pending,
+    InProgress,
+    Completed
+}
+
+let current = Status.Pending
+```
 
 ### Object Instantiation
-To create an instance of a class, use the `new` keyword. You can access properties and methods using dot notation (`.`).
+To create an instance of a standard (non-static) class, use the `new` keyword. You can access properties and methods using dot notation (`.`).
 
 ```bash
 let my_obj = new Utilities::Greeter()

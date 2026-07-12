@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         fn func_ret_val() {
             return "returned_value"
         }

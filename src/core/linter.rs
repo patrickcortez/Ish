@@ -203,7 +203,7 @@ impl Linter {
                 self.defined_vars.pop();
                 self.in_loop_depth -= 1;
             }
-            AstNodeKind::Assignment { variable, value, is_declaration } => {
+            AstNodeKind::Assignment { variable, index, value, is_declaration } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }
@@ -298,7 +298,17 @@ impl Linter {
                     self.check_node(stmt)?;
                 }
             }
-            AstNodeKind::ClassDecl { methods, fields, .. } => {
+            AstNodeKind::ClassDecl { methods, fields, constructor, destructor, .. } => {
+                if let Some(c) = constructor {
+                    for stmt in c {
+                        self.check_node(stmt)?;
+                    }
+                }
+                if let Some(d) = destructor {
+                    for stmt in d {
+                        self.check_node(stmt)?;
+                    }
+                }
                 for method in methods {
                     self.check_node(method)?;
                 }
@@ -325,6 +335,8 @@ impl Linter {
             AstNodeKind::PropertyAccess { object, .. } => {
                 self.check_node(object)?;
             }
+            AstNodeKind::EnumDecl { .. } => {}
+            AstNodeKind::WithImport { .. } => {}
         }
         Ok(())
     }

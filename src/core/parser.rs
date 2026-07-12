@@ -21,7 +21,22 @@ impl Parser {
                 self.consume();
                 continue;
             }
-            stmts.push(self.parse_logical()?);
+
+            // Top-level enforcement
+            if let Some(tok) = self.peek() {
+                match tok.kind {
+                    TokenKind::With | TokenKind::Enum | TokenKind::Class | TokenKind::Struct |
+                    TokenKind::Namespace | TokenKind::Public | TokenKind::Private | 
+                    TokenKind::Protected | TokenKind::Internal | TokenKind::Static => {
+                        stmts.push(self.parse_logical()?);
+                    }
+                    _ => {
+                        return Err(IshError::ParseError(format!("Top-level constraint violation: Cannot have statements outside a class, struct, enum, or with-import. Found: {:?}", tok.kind)));
+                    }
+                }
+            } else {
+                break;
+            }
         }
 
         if stmts.is_empty() {
@@ -116,9 +131,10 @@ impl Parser {
                 TokenKind::Public | TokenKind::Private | TokenKind::Protected | TokenKind::Internal | TokenKind::Static => {
                     self.parse_declaration()
                 }
-                TokenKind::Class | TokenKind::Struct | TokenKind::Function => {
+                TokenKind::Class | TokenKind::Struct | TokenKind::Function | TokenKind::Enum => {
                     self.parse_declaration()
                 }
+                TokenKind::With => self.parse_with_import(),
                 TokenKind::Namespace => self.parse_namespace(),
                 TokenKind::Return => {
                     let (line, col) = self.get_location();
@@ -146,7 +162,21 @@ impl Parser {
                 }
                 TokenKind::Try => self.parse_try_catch_statement(),
                 TokenKind::Variable(_) | TokenKind::Word(_) => {
-                    if self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1].kind, TokenKind::Assign) {
+                    let mut is_assignment = false;
+                    let mut lookahead = self.position + 1;
+                    if lookahead < self.tokens.len() && matches!(self.tokens[lookahead].kind, TokenKind::LBracket) {
+                        while lookahead < self.tokens.len() && !matches!(self.tokens[lookahead].kind, TokenKind::RBracket) {
+                            lookahead += 1;
+                        }
+                        if lookahead < self.tokens.len() && matches!(self.tokens[lookahead].kind, TokenKind::RBracket) {
+                            lookahead += 1;
+                        }
+                    }
+                    if lookahead < self.tokens.len() && matches!(self.tokens[lookahead].kind, TokenKind::Assign) {
+                        is_assignment = true;
+                    }
+                    
+                    if is_assignment {
                         self.parse_assignment(false, None)
                     } else {
                         self.parse_pipeline()
@@ -198,19 +228,31 @@ impl Parser {
             return Err(IshError::ParseError("Expected variable for assignment".to_string()));
         };
         
+        let mut index = None;
         if existing_var_name.is_none() {
+            if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBracket)) {
+                self.consume(); // [
+                index = Some(Box::new(self.parse_expression()?));
+                if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBracket)) {
+                    return Err(IshError::ParseError("Expected ']' after array index".to_string()));
+                }
+                self.consume(); // ]
+            }
+            if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Assign)) {
+                return Err(IshError::ParseError("Expected '=' in assignment".to_string()));
+            }
             self.consume(); // Consume TokenKind::Assign
         }
         
         // If the value is just a StringLiteral, we don't need to parse it as a full expression.
         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::StringLiteral(_))) {
             if let Some(TokenKind::StringLiteral(s)) = self.consume().map(|t| t.kind) {
-                return Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(AstNode::new(AstNodeKind::StringLiteral(s), line, col)), is_declaration }, line, col));
+                return Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, index, value: Box::new(AstNode::new(AstNodeKind::StringLiteral(s), line, col)), is_declaration }, line, col));
             }
         }
 
         let value = self.parse_statement()?; 
-        Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(value), is_declaration }, line, col))
+        Ok(AstNode::new(AstNodeKind::Assignment { variable: var_name, index, value: Box::new(value), is_declaration }, line, col))
     }
 
     fn parse_if_statement(&mut self) -> Result<AstNode, IshError> {
@@ -369,7 +411,8 @@ impl Parser {
                 TokenKind::Class => self.parse_class(access, is_static),
                 TokenKind::Struct => self.parse_struct(access),
                 TokenKind::Function => self.parse_function(access, is_static),
-                _ => Err(IshError::ParseError("Expected class, struct, or function declaration after modifiers".to_string())),
+                TokenKind::Enum => self.parse_enum(access),
+                _ => Err(IshError::ParseError("Expected class, struct, enum, or function declaration after modifiers".to_string())),
             }
         } else {
             Err(IshError::ParseError("Expected declaration after modifiers".to_string()))
@@ -395,6 +438,9 @@ impl Parser {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         
+        let mut constructor = None;
+        let mut destructor = None;
+
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::RBrace) {
                 self.consume();
@@ -402,6 +448,30 @@ impl Parser {
             }
             if matches!(tok.kind, TokenKind::Semicolon) {
                 self.consume();
+                continue;
+            }
+            if matches!(tok.kind, TokenKind::Constructor) {
+                self.consume(); // consume 'constructor'
+                // expect ()
+                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                    self.consume();
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
+                        self.consume();
+                    }
+                }
+                constructor = Some(self.parse_block()?);
+                continue;
+            }
+            if matches!(tok.kind, TokenKind::Destructor) {
+                self.consume(); // consume 'destructor'
+                // expect ()
+                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                    self.consume();
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
+                        self.consume();
+                    }
+                }
+                destructor = Some(self.parse_block()?);
                 continue;
             }
             // we expect methods or fields inside class
@@ -412,7 +482,7 @@ impl Parser {
             }
         }
 
-        Ok(AstNode::new(AstNodeKind::ClassDecl { name, access, is_static, methods, fields }, line, col))
+        Ok(AstNode::new(AstNodeKind::ClassDecl { name, access, is_static, methods, fields, constructor, destructor }, line, col))
     }
 
     fn parse_struct(&mut self, access: crate::core::ast::AccessSpecifier) -> Result<AstNode, IshError> {
@@ -455,13 +525,74 @@ impl Parser {
                 } else {
                     AstNode::new(AstNodeKind::StringLiteral("".to_string()), line, col)
                 };
-                fields.push(AstNode::new(AstNodeKind::Assignment { variable: var_name, value: Box::new(val), is_declaration: is_decl }, line, col));
+                fields.push(AstNode::new(AstNodeKind::Assignment { variable: var_name, index: None, value: Box::new(val), is_declaration: is_decl }, line, col));
             } else {
                 return Err(IshError::ParseError("Expected field declaration in struct".to_string()));
             }
         }
         
         Ok(AstNode::new(AstNodeKind::StructDecl { name, access, fields }, line, col))
+    }
+
+    fn parse_enum(&mut self, access: crate::core::ast::AccessSpecifier) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Enum
+        let name = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected enum name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected enum name".to_string())),
+        };
+
+        match self.consume() {
+            Some(tok) if matches!(tok.kind, TokenKind::LBrace) => {}
+            _ => return Err(IshError::ParseError("Expected '{' after enum name".to_string())),
+        }
+        
+        let mut variants = Vec::new();
+        while let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::RBrace) {
+                self.consume();
+                break;
+            }
+            if matches!(tok.kind, TokenKind::Comma) || matches!(tok.kind, TokenKind::Semicolon) {
+                self.consume();
+                continue;
+            }
+            
+            match self.consume() {
+                Some(tok) => match tok.kind {
+                    TokenKind::Word(w) | TokenKind::Variable(w) => variants.push(w),
+                    _ => return Err(IshError::ParseError("Expected enum variant name".to_string())),
+                },
+                None => return Err(IshError::ParseError("Expected enum variant name".to_string())),
+            }
+        }
+
+        Ok(AstNode::new(AstNodeKind::EnumDecl { name, access, variants }, line, col))
+    }
+
+    fn parse_with_import(&mut self) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::With
+        
+        let path = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected namespace path after 'with'".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected namespace path after 'with'".to_string())),
+        };
+
+        // Consume optional semicolon
+        if let Some(tok) = self.peek() {
+            if tok.kind == TokenKind::Semicolon {
+                self.consume();
+            }
+        }
+
+        Ok(AstNode::new(AstNodeKind::WithImport { path }, line, col))
     }
 
     fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
@@ -476,6 +607,7 @@ impl Parser {
         };
 
         let mut params = Vec::new();
+        let mut has_params = false;
         if let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::LParen) {
                 self.consume();
@@ -488,6 +620,30 @@ impl Parser {
                         self.consume();
                         continue;
                     }
+                    if matches!(tok.kind, TokenKind::Params) {
+                        self.consume(); // params
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Let)) {
+                            self.consume(); // let
+                            if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBracket)) {
+                                self.consume(); // [
+                                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBracket)) {
+                                    self.consume(); // ]
+                                }
+                            }
+                        }
+                        match self.consume() {
+                            Some(t) => match t.kind {
+                                TokenKind::Word(w) | TokenKind::Variable(w) => {
+                                    params.push(w);
+                                    has_params = true;
+                                }
+                                _ => return Err(IshError::ParseError("Expected param array name".to_string())),
+                            },
+                            None => return Err(IshError::ParseError("Expected param array name".to_string())),
+                        }
+                        continue;
+                    }
+
                     match self.consume() {
                         Some(tok) => match tok.kind {
                             TokenKind::Word(w) | TokenKind::Variable(w) => params.push(w),
@@ -500,7 +656,7 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(AstNode::new(AstNodeKind::Function { name, params, body, access, is_static }, line, col))
+        Ok(AstNode::new(AstNodeKind::Function { name, params, has_params, body, access, is_static }, line, col))
     }
 
     fn parse_block(&mut self) -> Result<Vec<AstNode>, IshError> {
@@ -554,14 +710,33 @@ impl Parser {
         
         if let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::Declare) || matches!(tok.kind, TokenKind::Let) {
-                self.consume();
-                return self.parse_assignment(true, None);
+                self.consume(); // consume Let or Declare
+                let mut is_array = false;
+                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBracket)) {
+                    self.consume(); // consume [
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBracket)) {
+                        self.consume(); // consume ]
+                        is_array = true;
+                    } else {
+                        return Err(IshError::ParseError("Expected ']' after 'let['".to_string()));
+                    }
+                }
+                let assign_node = self.parse_assignment(true, None)?;
+                if is_array {
+                    if let AstNodeKind::Assignment { value, .. } = &assign_node.kind {
+                        if !matches!(&value.kind, AstNodeKind::Array(_)) {
+                            return Err(IshError::ParseError("Array declaration 'let[]' must be initialized with an array [...]".to_string()));
+                        }
+                    }
+                }
+                return Ok(assign_node);
             }
             if matches!(tok.kind, TokenKind::New) {
                 self.consume(); // Consume TokenKind::New
                 let class_name = match self.consume() {
                     Some(tok) => match tok.kind {
                         TokenKind::Word(w) => w,
+                        TokenKind::List => "List".to_string(),
                         _ => return Err(IshError::ParseError("Expected class name after new".to_string())),
                     },
                     None => return Err(IshError::ParseError("Expected class name after new".to_string())),
@@ -650,6 +825,36 @@ impl Parser {
                     self.consume();
                     if p.parse::<f64>().is_ok() || p == "true" || p == "false" || p == "null" {
                         is_string_literal = true;
+                    } else if p.contains('.') {
+                        let parts: Vec<&str> = p.splitn(2, '.').collect();
+                        let obj_name = parts[0].to_string();
+                        let member_name = parts[1].to_string();
+                        
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                            self.consume();
+                            let mut args = Vec::new();
+                            while let Some(tok) = self.peek() {
+                                if matches!(tok.kind, TokenKind::RParen) {
+                                    self.consume();
+                                    break;
+                                }
+                                if matches!(tok.kind, TokenKind::Comma) {
+                                    self.consume();
+                                    continue;
+                                }
+                                args.push(self.parse_pipeline()?);
+                            }
+                            return Ok(AstNode::new(AstNodeKind::MethodCall {
+                                object: Box::new(AstNode::new(AstNodeKind::StringLiteral(obj_name), line, col)),
+                                method_name: member_name,
+                                args
+                            }, line, col));
+                        } else {
+                            return Ok(AstNode::new(AstNodeKind::PropertyAccess {
+                                object: Box::new(AstNode::new(AstNodeKind::StringLiteral(obj_name), line, col)),
+                                property_name: member_name,
+                            }, line, col));
+                        }
                     }
                     p
                 }
@@ -708,7 +913,7 @@ impl Parser {
                     };
                     return Ok(AstNode::new(AstNodeKind::Subshell(Box::new(ast_node)), line, col));
                 }
-                _ => return Err(IshError::ParseError(format!("Expected command name, found {:?}", tok.kind))),
+                _ => return Err(IshError::ParseError(format!("Expected command name, found {:?} at line {}, col {}", tok.kind, line, col))),
             }
         } else {
             return Err(IshError::ParseError("Expected command name".to_string()));

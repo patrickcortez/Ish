@@ -1,0 +1,50 @@
+with test.MyNamespace.MyUtils;
+
+public enum Status {
+    Pending,
+    InProgress,
+    Completed
+}
+
+public static class Program {
+    public static func Main(params let[] args) {
+        out "--- Testing C# Parity Features ---"
+
+        out "1. Testing 'with' and external static methods:"
+        declare greeting = MyUtils.GetGreeting("Ish Developer")
+        out $greeting
+
+        out "2. Testing Enums:"
+        declare p = Status.Pending
+        declare c = Status.Completed
+        out "Status.Pending = $p"
+        out "Status.Completed = $c"
+
+        out "3. Testing List type:"
+        declare myList = new List()
+        $myList.add("Apple")
+        $myList.add("Banana")
+        $myList.add("Cherry")
+        out "List after add:"
+        out $myList
+
+        out "Testing List index mutation:"
+        $myList[1] = "Blueberry"
+        out $myList
+
+        out "Testing List remove:"
+        $myList.remove(0)
+        out $myList
+
+        out "Testing List clear:"
+        $myList.clear()
+        out $myList
+
+        out "4. Testing Arrays (Immutable let[]):"
+        let[] arr = [10, 20, 30]
+        out $arr
+
+        out "--- Test Completed ---"
+        return 0
+    }
+}

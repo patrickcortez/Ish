@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         fn func() {
             declare num = 23
             num = expr $num + 23

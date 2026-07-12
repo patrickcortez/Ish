@@ -1,0 +1,5 @@
+public static class MyUtils {
+    public static func GetGreeting(name) {
+        return "Hello from MyUtils, $name!"
+    }
+}

@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         out "--- Starting Test 03: Loops & Arrays ---"
         
         let my_array = [ "apple", "banana", "cherry", "date", "elderberry" ]

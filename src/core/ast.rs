@@ -8,6 +8,7 @@ pub enum IshValue {
     Bool(bool),
     Null,
     Array(Vec<IshValue>),
+    List(Vec<IshValue>),
     Map(HashMap<String, IshValue>),
     Object {
         class_name: String,
@@ -31,7 +32,7 @@ impl IshValue {
             IshValue::Float(f) => f.to_string(),
             IshValue::Bool(b) => b.to_string(),
             IshValue::Null => "null".to_string(),
-            IshValue::Array(arr) => {
+            IshValue::Array(arr) | IshValue::List(arr) => {
                 // If the array contains ONLY maps, we can print it as a tabulated table.
                 if !arr.is_empty() && arr.iter().all(|v| matches!(v, IshValue::Map(_))) {
                     self.to_table_string()
@@ -53,7 +54,7 @@ impl IshValue {
 
     pub fn to_table_string(&self) -> String {
         match self {
-            IshValue::Array(arr) => {
+            IshValue::Array(arr) | IshValue::List(arr) => {
                 if arr.is_empty() { return "[]".to_string(); }
                 // Collect all unique keys from all maps
                 let mut keys: Vec<String> = Vec::new();
@@ -151,7 +152,7 @@ impl Into<serde_json::Value> for IshValue {
             }
             IshValue::Bool(b) => serde_json::Value::Bool(b),
             IshValue::Null => serde_json::Value::Null,
-            IshValue::Array(arr) => {
+            IshValue::Array(arr) | IshValue::List(arr) => {
                 let vec: Vec<serde_json::Value> = arr.into_iter().map(|v| v.into()).collect();
                 serde_json::Value::Array(vec)
             }
@@ -238,6 +239,7 @@ pub enum AstNodeKind {
     /// Variable assignment
     Assignment {
         variable: String,
+        index: Option<Box<AstNode>>,
         value: Box<AstNode>,
         is_declaration: bool,
     },
@@ -261,6 +263,7 @@ pub enum AstNodeKind {
     Function {
         name: String,
         params: Vec<String>,
+        has_params: bool, // For `params let[]` support
         body: Vec<AstNode>,
         access: AccessSpecifier,
         is_static: bool,
@@ -300,6 +303,8 @@ pub enum AstNodeKind {
         is_static: bool,
         methods: Vec<AstNode>,
         fields: Vec<AstNode>,
+        constructor: Option<Vec<AstNode>>,
+        destructor: Option<Vec<AstNode>>,
     },
 
     /// OOP: Struct Declaration
@@ -307,6 +312,18 @@ pub enum AstNodeKind {
         name: String,
         access: AccessSpecifier,
         fields: Vec<AstNode>,
+    },
+
+    /// OOP: Enum Declaration
+    EnumDecl {
+        name: String,
+        access: AccessSpecifier,
+        variants: Vec<String>,
+    },
+
+    /// OOP: Namespace/File Import
+    WithImport {
+        path: String,
     },
 
     /// OOP: Object Instantiation (`new ClassName()`)

@@ -42,6 +42,39 @@ impl Executor {
         }
     }
 
+    fn pop_scope(&mut self, jobs: &mut JobController) -> Result<(), IshError> {
+        if let Some(scope) = self.variables.pop() {
+            for (_, val) in scope {
+                if let IshValue::Object { class_name, properties } = val {
+                    let class_def = self.registry.resolve_class(&class_name).cloned();
+                    if let Some(cdef) = class_def {
+                        if let Some(destructor_body) = cdef.destructor {
+                            self.variables.push(HashMap::new());
+                            self.function_bases.push(self.variables.len() - 1);
+                            if let Some(dest_scope) = self.variables.last_mut() {
+                                dest_scope.insert("this".to_string(), IshValue::Object {
+                                    class_name: class_name.clone(),
+                                    properties,
+                                });
+                            }
+                            let prev_class = self.current_class.clone();
+                            self.current_class = Some(cdef.qualified_name.clone());
+                            
+                            for stmt in destructor_body {
+                                let _ = self.execute_node_with_input(&stmt, "", None, jobs);
+                            }
+                            
+                            self.function_bases.pop();
+                            let _ = self.pop_scope(jobs);
+                            self.current_class = prev_class;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
         let mut result = String::new();
         let mut chars = s.chars().peekable();
@@ -407,45 +440,59 @@ impl Executor {
             Ok(program_class_name) => {
                 // First, execute all declarations so methods get registered in self.functions
                 self.execute_node_with_input(ast, "", None, jobs)?;
-
-                // Now invoke Program::main
-                let class_def = self.registry.resolve_class("Program").cloned()
+                
+                // Now invoke Program::Main
+                let class_def = self.registry.classes.get("Program").cloned()
                     .ok_or_else(|| IshError::ExecutionError(
                         "Internal error: Program class disappeared after registration.".to_string()
                     ))?;
-
-                let main_method = class_def.methods.get("main")
+                    
+                let main_method = class_def.methods.get("Main")
                     .ok_or_else(|| IshError::ExecutionError(
-                        "Internal error: main method disappeared after registration.".to_string()
+                        "Internal error: Main method disappeared after registration.".to_string()
                     ))?;
-
+                    
+                // Check access and static
+                if !main_method.is_static {
+                    return Err(IshError::ExecutionError("Main method must be static.".to_string()));
+                }
+                
+                // Execute Main method body
+                self.current_class = Some("Program".to_string());
                 self.variables.push(HashMap::new());
                 self.function_bases.push(self.variables.len() - 1);
-                let prev_class = self.current_class.clone();
-                self.current_class = Some(program_class_name);
-
-                let mut success = true;
-                for stmt in &main_method.body {
-                    success = self.execute_node_with_input(stmt, "", None, jobs)?;
-                    if self.returning { break; }
+                
+                // Add args
+                let mut arg_list = Vec::new();
+                for arg in &self.script_args {
+                    arg_list.push(IshValue::String(arg.clone()));
+                }
+                if let Some(scope) = self.variables.last_mut() {
+                    scope.insert("args".to_string(), IshValue::Array(arg_list));
                 }
 
-                // Retrieve return value (exit code)
+                let mut last_output = String::new();
+                for stmt in &main_method.body {
+                    self.execute_node_with_input(stmt, "", None, jobs)?;
+                    if self.returning { break; }
+                }
+                
                 let ret_val = self.return_value.take();
+                
                 self.returning = false;
                 self.function_bases.pop();
-                self.variables.pop();
-                self.current_class = prev_class;
-
+                let _ = self.pop_scope(jobs);
+                self.current_class = None;
+                
                 if let Some(IshValue::Int(code)) = ret_val {
                     self.last_exit_code = code;
                 }
-
-                Ok(success)
+                
+                return Ok(true);
             }
             Err(_) => {
-                Err(IshError::ParseError(
-                    "Script must define 'public static class Program' with a 'public static func main()' method.".to_string()
+                Err(IshError::ExecutionError(
+                    "Script must define 'public static class Program' with a 'public static func Main(params let[] args)' method.".to_string()
                 ))
             }
         }
@@ -489,7 +536,7 @@ impl Executor {
 
                     self.returning = false;
                     self.function_bases.pop();
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                     self.last_exit_code = if success { 0 } else { 1 };
                     return Ok(success);
                 }
@@ -752,7 +799,7 @@ impl Executor {
                             }
                             self.returning = false;
                             self.function_bases.pop();
-                            self.variables.pop();
+                            let _ = self.pop_scope(jobs);
                             self.last_exit_code = if success { 0 } else { 1 };
                             last_cmd_success = success;
                             continue;
@@ -1087,7 +1134,7 @@ impl Executor {
                 Ok(success)
             }
 
-            AstNodeKind::Assignment { variable, value, is_declaration } => {
+            AstNodeKind::Assignment { variable, index, value, is_declaration } => {
                 let val = match &value.kind {
                     AstNodeKind::Array(items) => {
                         let mut arr = Vec::new();
@@ -1105,6 +1152,37 @@ impl Executor {
                     }
                     _ => self.evaluate_node(value, jobs)?,
                 };
+                
+                if let Some(idx_node) = index {
+                    let idx_val = self.evaluate_node(idx_node, jobs)?;
+                    let mut found = false;
+                    for scope in self.variables.iter_mut().rev() {
+                        if let Some(existing) = scope.get_mut(variable) {
+                            match existing {
+                                IshValue::Array(_) => return Err(IshError::ExecutionError("Array is immutable. Use List for mutable ordered collections.".to_string())),
+                                IshValue::List(l) => {
+                                    if let IshValue::Int(i) = idx_val {
+                                        if i >= 0 && (i as usize) < l.len() {
+                                            l[i as usize] = val.clone();
+                                        } else {
+                                            return Err(IshError::ExecutionError("Index out of bounds".to_string()));
+                                        }
+                                    } else {
+                                        return Err(IshError::ExecutionError("List index must be an integer".to_string()));
+                                    }
+                                }
+                                IshValue::Map(m) => {
+                                    m.insert(idx_val.to_string(), val.clone());
+                                }
+                                _ => return Err(IshError::ExecutionError("Variable is not indexable".to_string())),
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found { return Err(IshError::ExecutionError(format!("Variable {} not found", variable))); }
+                    return Ok(true);
+                }
                 
                 if *is_declaration {
                     if let Some(scope) = self.variables.last_mut() {
@@ -1141,14 +1219,14 @@ impl Executor {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                 } else if let Some(else_stmts) = else_body {
                     self.variables.push(HashMap::new());
                     for stmt in else_stmts {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                 }
                 Ok(block_success)
             }
@@ -1170,7 +1248,7 @@ impl Executor {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -1195,7 +1273,7 @@ impl Executor {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -1216,7 +1294,7 @@ impl Executor {
                             }
                         }
                         Err(e) => {
-                            self.variables.pop(); // pop try block scope
+                            let _ = self.pop_scope(jobs); // pop try block scope
                             
                             self.variables.push(HashMap::new()); // push catch block scope
                             if let Some(scope) = self.variables.last_mut() {
@@ -1229,14 +1307,14 @@ impl Executor {
                                     Err(_) => { catch_success = false; break; },
                                 }
                             }
-                            self.variables.pop(); // pop catch block scope
+                            let _ = self.pop_scope(jobs); // pop catch block scope
                             self.last_exit_code = if catch_success { 0 } else { 1 };
                             return Ok(catch_success);
                         }
                     }
                     if self.returning || self.breaking || self.continuing { break; }
                 }
-                self.variables.pop();
+                let _ = self.pop_scope(jobs);
                 self.last_exit_code = if success { 0 } else { 1 };
                 Ok(success)
             }
@@ -1346,6 +1424,11 @@ impl Executor {
 
             // ---- OOP: Object Instantiation ----
             AstNodeKind::ObjectInstantiation { class_name, args } => {
+                if class_name == "List" {
+                    self.return_value = Some(IshValue::List(Vec::new()));
+                    return Ok(true);
+                }
+                
                 let class_def = self.registry.resolve_class(class_name).cloned()
                     .ok_or_else(|| IshError::ExecutionError(format!(
                         "Class '{}' is not defined.", class_name
@@ -1377,7 +1460,7 @@ impl Executor {
                     eval_args.push(self.evaluate_node(arg_node, jobs)?);
                 }
 
-                if let Some(constructor) = class_def.methods.get(class_name) {
+                if let Some(constructor_body) = &class_def.constructor {
                     // Push a scope for constructor execution
                     self.variables.push(HashMap::new());
                     self.function_bases.push(self.variables.len() - 1);
@@ -1387,15 +1470,11 @@ impl Executor {
                             class_name: class_name.clone(),
                             properties: properties.clone(),
                         });
-                        for (i, param) in constructor.params.iter().enumerate() {
-                            if i < eval_args.len() {
-                                scope.insert(param.clone(), eval_args[i].clone());
-                            }
-                        }
+                        // Assume no params for constructor yet, or parse them later
                     }
                     let prev_class = self.current_class.clone();
                     self.current_class = Some(class_def.qualified_name.clone());
-                    for stmt in &constructor.body {
+                    for stmt in constructor_body {
                         self.execute_node_with_input(stmt, "", None, jobs)?;
                         if self.returning { break; }
                     }
@@ -1407,7 +1486,7 @@ impl Executor {
                     }
                     self.returning = false;
                     self.function_bases.pop();
-                    self.variables.pop();
+                    let _ = self.pop_scope(jobs);
                     self.current_class = prev_class;
                 }
 
@@ -1423,6 +1502,43 @@ impl Executor {
                 let obj_val = self.evaluate_node(object, jobs)?;
 
                 match obj_val {
+                    IshValue::List(mut l) => {
+                        match method_name.as_str() {
+                            "add" => {
+                                if let Some(arg) = args.get(0) {
+                                    l.push(self.evaluate_node(arg, jobs)?);
+                                }
+                            }
+                            "remove" => {
+                                if let Some(arg) = args.get(0) {
+                                    let idx = self.evaluate_node(arg, jobs)?;
+                                    if let IshValue::Int(i) = idx {
+                                        if i >= 0 && (i as usize) < l.len() {
+                                            l.remove(i as usize);
+                                        }
+                                    }
+                                }
+                            }
+                            "clear" => l.clear(),
+                            _ => return Err(IshError::ExecutionError(format!("List has no method '{}'", method_name))),
+                        }
+                        
+                        // Copy back if object is a variable
+                        if let AstNodeKind::StringLiteral(var_name) = &object.kind {
+                            let actual_var_name = if var_name.starts_with('$') {
+                                var_name[1..].to_string()
+                            } else {
+                                var_name.clone()
+                            };
+                            for scope in self.variables.iter_mut().rev() {
+                                if scope.contains_key(&actual_var_name) {
+                                    scope.insert(actual_var_name, IshValue::List(l));
+                                    break;
+                                }
+                            }
+                        }
+                        return Ok(true);
+                    }
                     IshValue::Object { ref class_name, .. } => {
                         let class_def = self.registry.resolve_class(class_name).cloned()
                             .ok_or_else(|| IshError::ExecutionError(format!(
@@ -1465,9 +1581,31 @@ impl Executor {
                         }
 
                         let ret_val = self.return_value.take();
+                        
+                        let mut new_this = obj_val.clone();
+                        if let Some(scope) = self.variables.last() {
+                            if let Some(t) = scope.get("this") {
+                                new_this = t.clone();
+                            }
+                        }
                         self.returning = false;
                         self.function_bases.pop();
-                        self.variables.pop();
+                        let _ = self.pop_scope(jobs);
+                        
+                        // Copy back if object is a variable
+                        if let AstNodeKind::StringLiteral(var_name) = &object.kind {
+                            let actual_var_name = if var_name.starts_with('$') {
+                                var_name[1..].to_string()
+                            } else {
+                                var_name.clone()
+                            };
+                            for scope in self.variables.iter_mut().rev() {
+                                if scope.contains_key(&actual_var_name) {
+                                    scope.insert(actual_var_name, new_this.clone());
+                                    break;
+                                }
+                            }
+                        }
                         self.current_class = prev_class;
 
                         if let Some(val) = ret_val {
@@ -1477,8 +1615,70 @@ impl Executor {
                         self.last_exit_code = if success { 0 } else { 1 };
                         Ok(success)
                     }
+                    IshValue::String(s) => {
+                        // Check if s is a class name (Static Method Call)
+                        if let Some(class_def) = self.registry.resolve_class(&s) {
+                            let class_def_clone = class_def.clone();
+                            let method = class_def_clone.methods.get(method_name.as_str())
+                                .ok_or_else(|| IshError::ExecutionError(format!(
+                                    "Method '{}' not found on class '{}'.", method_name, s
+                                )))?;
+
+                            if !method.is_static {
+                                return Err(IshError::ExecutionError(format!(
+                                    "Cannot call instance method '{}' without an object instance.", method_name
+                                )));
+                            }
+
+                            // Check access specifier
+                            Registry::check_access(&method.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
+
+                            // Evaluate arguments
+                            let mut eval_args = Vec::new();
+                            for arg_node in args {
+                                eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                            }
+
+                            // Push method scope
+                            self.variables.push(HashMap::new());
+                            self.function_bases.push(self.variables.len() - 1);
+                            if let Some(scope) = self.variables.last_mut() {
+                                for (i, param) in method.params.iter().enumerate() {
+                                    if i < eval_args.len() {
+                                        scope.insert(param.clone(), eval_args[i].clone());
+                                    }
+                                }
+                            }
+
+                            let prev_class = self.current_class.clone();
+                            self.current_class = Some(class_def_clone.qualified_name.clone());
+
+                            let mut success = true;
+                            for stmt in &method.body {
+                                success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                                if self.returning { break; }
+                            }
+
+                            let ret_val = self.return_value.take();
+                            self.returning = false;
+                            self.function_bases.pop();
+                            let _ = self.pop_scope(jobs);
+
+                            self.current_class = prev_class;
+
+                            if let Some(val) = ret_val {
+                                self.return_value = Some(val);
+                            }
+
+                            self.last_exit_code = if success { 0 } else { 1 };
+                            Ok(success)
+                        } else {
+                            Err(IshError::ExecutionError(format!(
+                                "Cannot call method '{}' on non-object value '{}'.", method_name, s
+                            )))
+                        }
+                    }
                     _ => {
-                        // For non-object values, try calling as a qualified static method (e.g. ClassName::method)
                         Err(IshError::ExecutionError(format!(
                             "Cannot call method '{}' on non-object value '{}'.", method_name, obj_val.to_string()
                         )))
@@ -1489,6 +1689,27 @@ impl Executor {
             // ---- OOP: Property Access ----
             AstNodeKind::PropertyAccess { object, property_name } => {
                 let obj_val = self.evaluate_node(object, jobs)?;
+                
+                // Check if obj_val is an Enum reference
+                if let IshValue::String(s) = &obj_val {
+                    if let Some(enum_def) = self.registry.enums.get(s) {
+                        if let Some(index) = enum_def.variants.iter().position(|v| v == property_name) {
+                            let val = IshValue::Int(index as i32);
+                            let output = val.to_string();
+                            if let Some(path) = out_file {
+                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                let _ = file.write_all(output.as_bytes());
+                            } else if !output.is_empty() {
+                                print!("{}", output);
+                                let _ = std::io::stdout().flush();
+                            }
+                            self.return_value = Some(val);
+                            return Ok(true);
+                        } else {
+                            return Err(IshError::ExecutionError(format!("Enum {} does not have variant {}", s, property_name)));
+                        }
+                    }
+                }
 
                 match &obj_val {
                     IshValue::Object { class_name, properties } => {
@@ -1534,6 +1755,8 @@ impl Executor {
                     ))),
                 }
             }
+            AstNodeKind::EnumDecl { .. } => Ok(true),
+            AstNodeKind::WithImport { .. } => Ok(true),
         }
     }
 }

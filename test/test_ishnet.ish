@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         declare ip = net_resolve "api.ipify.org"
         declare ip_me = net_ip
         declare is_avail = net_isavailable

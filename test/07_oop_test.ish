@@ -7,7 +7,7 @@ namespace App {
     }
 
     public static class Program {
-        public static func main() {
+        public static func Main(params let[] args) {
             out "=== OOP Test ==="
             let $greeter = new Greeter()
             $greeter.greet("World")

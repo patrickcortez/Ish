@@ -54,6 +54,12 @@ pub enum TokenKind {
     Internal,
     Static,
     New,
+    With,
+    Enum,
+    Constructor,
+    Destructor,
+    Params,
+    List,
 
     // Symbols
     LBrace,         // {
@@ -325,6 +331,12 @@ impl Tokenizer {
                             "internal" => TokenKind::Internal,
                             "static" => TokenKind::Static,
                             "new" => TokenKind::New,
+                            "with" => TokenKind::With,
+                            "enum" => TokenKind::Enum,
+                            "constructor" => TokenKind::Constructor,
+                            "destructor" => TokenKind::Destructor,
+                            "params" => TokenKind::Params,
+                            "List" => TokenKind::List,
                             _ => TokenKind::Word(word),
                         }
                     }
@@ -350,7 +362,7 @@ impl Tokenizer {
         let mut word = String::new();
         while self.position < self.input.len() {
             let ch = self.input[self.position];
-            if ch.is_whitespace() || "{}()=,:\"'$!<>".contains(ch) {
+            if ch.is_whitespace() || "{}()[]=,:;\"'$!<>".contains(ch) {
                 break;
             }
             word.push(ch);

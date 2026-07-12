@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         declare os = os_os
         declare arch = os_arch
         declare plat = os_platform

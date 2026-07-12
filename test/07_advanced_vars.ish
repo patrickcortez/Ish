@@ -1,5 +1,5 @@
 public static class Program {
-    public static func main() {
+    public static func Main(params let[] args) {
         # Test script for advanced variables, subshells, and math expansions
         
         out "Script args: $@"
