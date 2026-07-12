@@ -1,0 +1,23 @@
+fn func_ret_val() {
+    return "returned_value"
+}
+
+fn func_no_ret() {
+    out "this is just text output"
+}
+
+declare a = func_ret_val
+declare b = func_no_ret
+
+out "a: $a"
+out "b: $b"
+
+declare c = $(func_no_ret)
+out "c: $c"
+
+fn func_subshell_ret() {
+    return $(expr 5 + 5)
+}
+
+declare d = func_subshell_ret
+out "d: $d"

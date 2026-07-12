@@ -1,7 +1,7 @@
 out "--- Starting Test 02: Math & Logic ---"
 
-declare a = expr 10 + 5 * 2
-declare b = expr ( 10 + 5 ) * 2
+declare a = "$(( 10 + 5 * 2 ))"
+declare b = "$(( ( 10 + 5 ) * 2 ))"
 
 out "10 + 5 * 2 evaluates to: $a"
 out "( 10 + 5 ) * 2 evaluates to: $b"

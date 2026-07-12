@@ -3,7 +3,8 @@ use crate::error::IshError;
 use std::collections::{HashMap, HashSet};
 
 pub struct Linter {
-    defined_vars: HashSet<String>,
+    defined_vars: Vec<HashSet<String>>,
+    function_bases: Vec<usize>,
     defined_functions: HashMap<String, usize>, // name -> param count
     in_loop_depth: usize,
 }
@@ -11,7 +12,8 @@ pub struct Linter {
 impl Linter {
     pub fn new() -> Self {
         Self {
-            defined_vars: HashSet::new(),
+            defined_vars: vec![HashSet::new()],
+            function_bases: vec![0],
             defined_functions: HashMap::new(),
             in_loop_depth: 0,
         }
@@ -21,6 +23,58 @@ impl Linter {
         self.check_node(ast)
     }
 
+    fn is_var_defined(&self, var_name: &str) -> bool {
+        if var_name.is_empty() || var_name == "?" || var_name == "LAST" || var_name == "$" || var_name == "!" || var_name == "#" || var_name == "@" || var_name == "0" {
+            return true;
+        }
+        
+        let base_idx = *self.function_bases.last().unwrap_or(&0);
+        let mut search_scopes = vec![];
+        for i in (base_idx..self.defined_vars.len()).rev() {
+            search_scopes.push(i);
+        }
+        if base_idx != 0 {
+            search_scopes.push(0);
+        }
+        
+        for &idx in &search_scopes {
+            let scope = &self.defined_vars[idx];
+            if scope.contains(var_name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn check_variables_in_string(&self, s: &str, line: usize, col: usize) -> Result<(), IshError> {
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '$' {
+                if chars.peek() == Some(&'(') {
+                    continue; // Skip $(
+                }
+                let mut var_name = String::new();
+                if let Some(&nc) = chars.peek() {
+                    if "?!@#$0".contains(nc) {
+                        var_name.push(chars.next().unwrap());
+                    } else {
+                        while let Some(&nc) = chars.peek() {
+                            if nc.is_alphanumeric() || nc == '_' {
+                                var_name.push(chars.next().unwrap());
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if !var_name.is_empty() && !self.is_var_defined(&var_name) {
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Variable '{}' is not defined in this scope", line, col, var_name)));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_node(&mut self, node: &AstNode) -> Result<(), IshError> {
         match &node.kind {
             AstNodeKind::Command { program, args, redirect_to, redirect_from, .. } => {
@@ -28,26 +82,22 @@ impl Linter {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Empty command detected", node.line, node.column)));
                 }
 
-                // If program is a variable, make sure it is defined
-                if program.starts_with('$') {
-                    let _var_name = &program[1..];
-                    // We can't strictly enforce because environment vars exist, but we could warn.
-                    // For now, shell allows undefined vars to resolve to empty strings.
-                } else {
-                    // Check if program is a function, if so check arity.
-                    // If not in functions, we assume it's an external OS command.
+                self.check_variables_in_string(program, node.line, node.column)?;
+                for arg in args {
+                    self.check_variables_in_string(arg, node.line, node.column)?;
+                }
+
+                if !program.starts_with('$') {
                     if let Some(expected_args) = self.defined_functions.get(program) {
-                        if args.len() != *expected_args && *expected_args > 0 {
-                            // Only strictly check if params were named. If params is 0, they might use $1, $2 dynamically.
-                            if !args.is_empty() && *expected_args > 0 && args.len() != *expected_args {
-                                // Just a soft warning or notice normally, but we are a strict linter!
-                                // Wait, bash allows variadic args. Let's allow it but we could add strict modes later.
-                            }
+                        if args.len() != *expected_args {
+                            return Err(IshError::ParseError(format!(
+                                "Linter Error at Line {}, Column {}: Function '{}' expects {} arguments, but got {}",
+                                node.line, node.column, program, expected_args, args.len()
+                            )));
                         }
                     }
                 }
 
-                // Check invalid redirection combinations
                 if redirect_to.is_some() && redirect_to == redirect_from {
                     return Err(IshError::ParseError(format!(
                         "Linter Error at Line {}, Column {}: Cannot redirect to and from the same file '{}'",
@@ -84,62 +134,89 @@ impl Linter {
                 if body.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'if' statement has an empty body", node.line, node.column)));
                 }
+                
+                self.defined_vars.push(HashSet::new());
                 for n in body {
                     self.check_node(n)?;
                 }
+                self.defined_vars.pop();
+
                 if let Some(eb) = else_body {
                     if eb.is_empty() {
                         return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'else' statement has an empty body", node.line, node.column)));
                     }
+                    self.defined_vars.push(HashSet::new());
                     for n in eb {
                         self.check_node(n)?;
                     }
+                    self.defined_vars.pop();
                 }
             }
             AstNodeKind::TryCatch { try_body, error_var, catch_body } => {
                 if try_body.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'try' block is empty", node.line, node.column)));
                 }
+                self.defined_vars.push(HashSet::new());
                 for n in try_body {
                     self.check_node(n)?;
                 }
-                self.defined_vars.insert(error_var.clone());
+                self.defined_vars.pop();
+
+                self.defined_vars.push(HashSet::new());
+                if let Some(scope) = self.defined_vars.last_mut() {
+                    scope.insert(error_var.clone());
+                }
                 for n in catch_body {
                     self.check_node(n)?;
                 }
+                self.defined_vars.pop();
             }
             AstNodeKind::While { condition, body } => {
                 self.check_node(condition)?;
                 if body.is_empty() {
-                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'while' loop has an empty body. Infinite spin risk!", node.line, node.column)));
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'while' loop has an empty body", node.line, node.column)));
                 }
                 self.in_loop_depth += 1;
+                self.defined_vars.push(HashSet::new());
                 for n in body {
                     self.check_node(n)?;
                 }
+                self.defined_vars.pop();
                 self.in_loop_depth -= 1;
             }
             AstNodeKind::For { variable, iterable, body } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'for' loop missing variable name", node.line, node.column)));
                 }
-                self.defined_vars.insert(variable.clone());
                 self.check_node(iterable)?;
                 if body.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'for' loop has an empty body", node.line, node.column)));
                 }
                 self.in_loop_depth += 1;
+                self.defined_vars.push(HashSet::new());
+                if let Some(scope) = self.defined_vars.last_mut() {
+                    scope.insert(variable.clone());
+                }
                 for n in body {
                     self.check_node(n)?;
                 }
+                self.defined_vars.pop();
                 self.in_loop_depth -= 1;
             }
-            AstNodeKind::Assignment { variable, value, is_declaration: _ } => {
+            AstNodeKind::Assignment { variable, value, is_declaration } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }
                 self.check_node(value)?;
-                self.defined_vars.insert(variable.clone());
+                if *is_declaration {
+                    if let Some(scope) = self.defined_vars.last_mut() {
+                        scope.insert(variable.clone());
+                    }
+                } else {
+                    if !self.is_var_defined(variable) {
+                        return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Variable '{}' is assigned before being declared", node.line, node.column, variable)));
+                    }
+                }
             }
             AstNodeKind::Function { name, params, body } => {
                 if name.is_empty() {
@@ -149,21 +226,60 @@ impl Linter {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Function '{}' has an empty body", node.line, node.column, name)));
                 }
                 self.defined_functions.insert(name.clone(), params.len());
-                let prev_vars = self.defined_vars.clone();
-                for param in params {
-                    self.defined_vars.insert(param.clone());
+                
+                self.defined_vars.push(HashSet::new());
+                self.function_bases.push(self.defined_vars.len() - 1);
+                
+                if let Some(scope) = self.defined_vars.last_mut() {
+                    for param in params {
+                        scope.insert(param.clone());
+                    }
                 }
+                
                 for stmt in body {
                     self.check_node(stmt)?;
                 }
-                self.defined_vars = prev_vars;
+                
+                self.function_bases.pop();
+                self.defined_vars.pop();
             }
-            AstNodeKind::Break | AstNodeKind::Continue | AstNodeKind::StringLiteral(_) => {
-                if self.in_loop_depth == 0 && matches!(node.kind, AstNodeKind::Break | AstNodeKind::Continue) {
+            AstNodeKind::Break | AstNodeKind::Continue => {
+                if self.in_loop_depth == 0 {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: 'break' or 'continue' used outside of a loop", node.line, node.column)));
                 }
             }
+            AstNodeKind::StringLiteral(s) => {
+                self.check_variables_in_string(s, node.line, node.column)?;
+            }
             AstNodeKind::Return(inner) => {
+                fn check_invalid_return(n: &AstNode) -> Option<String> {
+                    match &n.kind {
+                        AstNodeKind::Command { program, .. } => {
+                            let invalid_cmds = ["out", "show", "cd", "export", "alias", "unalias", "kill", "fg", "jobs", "declare", "let"];
+                            if invalid_cmds.contains(&program.as_str()) {
+                                return Some(program.clone());
+                            }
+                        }
+                        AstNodeKind::Pipeline(commands) => {
+                            if let Some(last) = commands.last() {
+                                return check_invalid_return(last);
+                            }
+                        }
+                        AstNodeKind::Subshell(inner_sub) => {
+                            return check_invalid_return(inner_sub);
+                        }
+                        _ => {}
+                    }
+                    None
+                }
+                
+                if let Some(invalid_cmd) = check_invalid_return(inner) {
+                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: cannot return command '{}'. Returns can only return values or variables.", node.line, node.column, invalid_cmd)));
+                }
+
+                self.check_node(inner)?;
+            }
+            AstNodeKind::Subshell(inner) => {
                 self.check_node(inner)?;
             }
             AstNodeKind::Array(items) => {

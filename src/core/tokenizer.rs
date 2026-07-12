@@ -3,6 +3,7 @@ pub enum TokenKind {
     Word(String),
     Variable(String),
     StringLiteral(String),
+    Subshell(String),
 
     // Ish custom syntax
     Pipe,           // :
@@ -34,6 +35,7 @@ pub enum TokenKind {
     For,
     Foreach,
     Declare,
+    Let,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
@@ -202,8 +204,29 @@ impl Tokenizer {
                 }
                 '$' => {
                     self.advance();
-                    let var_name = self.read_word();
-                    TokenKind::Variable(var_name)
+                    if self.position < self.input.len() && self.input[self.position] == '(' {
+                        self.advance();
+                        let mut depth = 1;
+                        let mut subshell_content = String::new();
+                        while self.position < self.input.len() {
+                            let c = self.input[self.position];
+                            if c == '(' {
+                                depth += 1;
+                            } else if c == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    self.advance();
+                                    break;
+                                }
+                            }
+                            subshell_content.push(c);
+                            self.advance();
+                        }
+                        TokenKind::Subshell(subshell_content)
+                    } else {
+                        let var_name = self.read_word();
+                        TokenKind::Variable(var_name)
+                    }
                 }
                 '"' | '\'' => {
                     let string_val = self.read_string(ch)?;
@@ -275,6 +298,7 @@ impl Tokenizer {
                             "for" => TokenKind::For,
                             "foreach" => TokenKind::Foreach,
                             "declare" => TokenKind::Declare,
+                            "let" => TokenKind::Let,
                             "fn" => TokenKind::Function,
                             "return" => TokenKind::Return,
                             "break" => TokenKind::Break,

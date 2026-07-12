@@ -248,6 +248,9 @@ pub enum AstNodeKind {
         catch_body: Vec<AstNode>,
     },
 
+    /// Subshell execution that returns a value (e.g. `$(...)`)
+    Subshell(Box<AstNode>),
+
     /// Return statement
     Return(Box<AstNode>),
 

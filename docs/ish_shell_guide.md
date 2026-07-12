@@ -1,76 +1,62 @@
 # Ish Shell Guide
 
-Welcome to the **Ish (Intelli-Shell)** User Guide! Ish is a cross-platform system shell written in Rust using Ratatui. It is designed to be an aesthetically pleasing and highly efficient interface for both casual users and power users.
+Welcome to the **Ish (Intelli-Shell)** User Guide! Ish is a cross-platform system shell written in Rust. It is designed to be highly efficient, bridging the gap between raw unstructured terminal output and modern structured data objects.
 
-## The TUI Layout
-Ish completely reimagines the terminal interface by using fixed, structured boxes instead of a traditional scrolling prompt.
-- **Input Box**: Anchored firmly at the bottom of the screen. You type all your commands here. Features an interactive blinking caret and allows for mid-command editing using the `Left` and `Right` arrow keys.
-- **Output Box**: Displays all standard output and standard error from your commands.
-  - *Scrolling*: Navigate up and down through massive output logs using `PageUp`/`PageDown` or `Ctrl+Up`/`Ctrl+Down`.
-- **Suggestions Box**: A dynamic overlay that hovers right above the Input Box. It provides intelligent, real-time autocomplete suggestions based on your history, the local filesystem, and native OS executables. 
-  - *Scrolling*: Navigate suggestions using `Up` and `Down`. 
-  - *Accepting*: Press `Right Arrow` or `Tab` to insert the currently highlighted suggestion into your input box.
+## Table of Contents
+- [JSON-Structured Output](#json-structured-output)
+- [Piping Objects](#piping-objects)
+- [Built-In Commands](#built-in-commands)
+- [Advanced Shell Logic](#advanced-shell-logic)
+
+## JSON-Structured Output
+
+Ish handles data beautifully using native tables instead of messy text. Under the hood, Ish passes variables as JSON-like structures (Strings, Integers, Booleans, Arrays, and Maps).
+
+Whenever an Ish command (or an external command) outputs an Array of Maps, Ish automatically intercepts the data and renders it as a structured Unicode table.
+
+```bash
+> show .
+┌────────┬─────────┬────────────────────┬───────┐
+│ is_dir ┆ is_file ┆ name               ┆ size  │
+╞════════╪═════════╪════════════════════╪═══════╡
+│ false  ┆ true    ┆ .gitignore         ┆ 45    │
+├╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┤
+│ true   ┆ false   ┆ src                ┆ 0     │
+└────────┴─────────┴────────────────────┴───────┘
+```
+
+> If an external tool like `curl` outputs a JSON array, Ish automatically converts it to a table seamlessly!
+
+## Piping Objects
+
+To pipe commands in Ish, you can use either the standard Unix pipe `|` or the Ish specific colon pipe `:`.
+
+```bash
+> show . | str_tolower
+# OR
+> show . : str_tolower
+```
+
+When you pipe commands in Ish, you are not just passing text strings. Ish serializes the structured data into JSON and pipes it directly. This means you can interact with complex objects securely inside the shell.
 
 ## Built-In Commands
-Ish handles normal OS commands natively, but also provides internal built-ins prefixed by a colon `:`.
 
-- `:Color <Target> <Color>`
-  Changes the visual color scheme of Ish's UI components.
-  - **Targets**: `--inputbox`, `--output`, `--banner`
-  - **Colors**: Valid color names (e.g., `Red`, `Green`, `Cyan`) or Hexadecimal values.
-  
-- `:Toggle <Flag>`
-  Toggles internal shell features.
-  - **Flags**: `--autocd true/false` (Enables changing directories automatically by typing a path), `--suggestions true/false` (Toggles the suggestion box visibility).
+Ish handles normal OS commands natively, but also provides internal built-ins:
 
-- `:Editor <editor_name>`
-  Sets the default text editor for automatically opening files when navigating the terminal.
-
-- `change <path>`
-  Changes the current working directory.
-
-- `quit`
-  Gracefully terminates the shell and flushes your history to disk.
-
-- `declare [var=value]`
-  Sets or views environment variables.
-
-- `out <text>`
-  Prints text to standard output.
-
-- `cwd`
-  Prints the current working directory.
-
-- `show [path]`
-  Lists directory contents.
-
-- `read <file>`
-  Reads and prints file contents.
-
-- `create <-f|-d> <name>`
-  Creates a file (`-f`) or a directory (`-d`). Defaults to file creation if no flag is provided.
-
-- `input [prompt]`
-  Reads a full line of text from standard input.
-
-- `inputkey [prompt]`
-  Reads exactly one keystroke from standard input in raw mode.
-
-- `expr <math_expression>`
-  Evaluates mathematical expressions.
-
-## Native PowerShell Integration (Windows)
-When running Ish on Windows, the shell seamlessly bridges into the OS.
-- **Object Piping**: When you execute a pipeline consisting entirely of native Windows/PowerShell commands (e.g. `Get-ChildItem : Where-Object Name -eq "test"`), Ish optimizes the execution by aggregating it into a unified native PowerShell pipeline. This means `.NET` objects are fully preserved between commands, exactly like native PowerShell!
-- **Cmdlet Autocomplete**: Ish automatically parses and caches all native PowerShell Cmdlets, Functions, and Aliases in the background when it boots. This means you will immediately get autocomplete suggestions for standard Windows commands like `Invoke-WebRequest` without any configuration.
+- `change <path>`: Changes the current working directory.
+- `quit`: Gracefully terminates the shell.
+- `declare [var=value]`: Sets or views environment variables.
+- `out <text>`: Prints text to standard output.
+- `cwd`: Prints the current working directory.
+- `show [path]`: Lists directory contents natively as structured tabular objects.
+- `read <file>`: Reads and prints file contents.
+- `create <-f|-d> <name>`: Creates a file (`-f`) or a directory (`-d`). Defaults to file.
+- `input [prompt]`: Reads a full line of text from standard input.
+- `inputkey [prompt]`: Reads exactly one keystroke from standard input in raw mode.
+- `expr <math_expression>`: Evaluates mathematical expressions automatically.
 
 ## Advanced Shell Logic
-Because Ish uses the exact same AST parsing engine (`tokenizer.rs`, `parser.rs`) for both the interactive prompt and `.ish` scripts, **everything available in Ish Scripts is available live in the interactive shell!**
 
-This means right from your prompt, you can use:
-- **English Redirections**: `echo "Hello" append to file.txt` or `cmd merge err to output.log`
-- **State Variables**: `echo $LAST` (previous exit code)
-- **Comparison Operators**: Native `==`, `!=`, `<`, `>`, `<=`, `>=`
-- **Control Flow**: Complex `if`/`elif`/`else` logic directly executed on the fly.
+Because Ish uses the exact same parsing engine for both the interactive prompt and `.ish` scripts, **everything available in Ish Scripts is available live in the interactive shell!**
 
-For full syntax details, see the [Ish Scripting Guide](ish_scripting_guide.md).
+You can use English redirections (`merge err`, `append to`), control flow, and mathematical operators dynamically. For full syntax details, see the [Ish Scripting Guide](ish_scripting_guide.md).

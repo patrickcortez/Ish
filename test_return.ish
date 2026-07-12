@@ -1,0 +1,6 @@
+declare x = 5
+fn myfunc() {
+    return $x
+}
+declare y = myfunc
+out $y

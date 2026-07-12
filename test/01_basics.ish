@@ -1,7 +1,7 @@
 out "--- Starting Test 01: Basics ---"
 
-user="Cortez"
-greeting="Welcome to Ish, $user!"
+declare user="Cortez"
+declare greeting="Welcome to Ish, $user !"
 out $greeting
 
 out "Current directory contents:"

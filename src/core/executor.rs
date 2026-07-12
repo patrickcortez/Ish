@@ -11,6 +11,8 @@ pub struct Executor {
     pub script_args: Vec<String>,
     pub last_exit_code: i32,
     pub variables: Vec<HashMap<String, IshValue>>,
+    pub function_bases: Vec<usize>,
+    pub return_value: Option<IshValue>,
     pub functions: HashMap<String, AstNode>,
     pub returning: bool,
     pub breaking: bool,
@@ -24,6 +26,8 @@ impl Executor {
             script_args, 
             last_exit_code: 0,
             variables: vec![HashMap::new()],
+            function_bases: vec![0],
+            return_value: None,
             functions: HashMap::new(),
             returning: false,
             breaking: false,
@@ -60,7 +64,11 @@ impl Executor {
                         if depth > 0 {
                             return Err(IshError::ParseError("Unclosed math expansion `$((`".to_string()));
                         }
-                        match crate::core::utils::eval_math(&inner) {
+                        if chars.peek() == Some(&')') {
+                            chars.next(); // Consume outer ')'
+                        }
+                        let resolved_inner = self.resolve_var(&inner, jobs)?;
+                        match crate::core::utils::eval_math(&resolved_inner) {
                             Ok(val) => result.push_str(&val.to_string()),
                             Err(e) => return Err(IshError::ExecutionError(format!("Math error: {}", e))),
                         }
@@ -126,7 +134,17 @@ impl Executor {
                     result.push_str("ish");
                 } else {
                     let mut found = false;
-                    for scope in self.variables.iter().rev() {
+                    let base_idx = *self.function_bases.last().unwrap_or(&0);
+                    let mut search_scopes = vec![];
+                    for i in (base_idx..self.variables.len()).rev() {
+                        search_scopes.push(i);
+                    }
+                    if base_idx != 0 {
+                        search_scopes.push(0); // Also search global scope
+                    }
+                    
+                    for &idx in &search_scopes {
+                        let scope = &self.variables[idx];
                         if let Some(val) = scope.get(&var_name) {
                             let mut final_val = val.clone();
                             if chars.peek() == Some(&'[') {
@@ -226,6 +244,22 @@ impl Executor {
     pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
             AstNodeKind::StringLiteral(s) => {
+                if s.starts_with('$') && !s.contains(" ") && !s.contains("(") && !s.contains("{") {
+                    let var_name = &s[1..];
+                    let base_idx = *self.function_bases.last().unwrap_or(&0);
+                    let mut search_scopes = vec![];
+                    for i in (base_idx..self.variables.len()).rev() {
+                        search_scopes.push(i);
+                    }
+                    if base_idx != 0 {
+                        search_scopes.push(0);
+                    }
+                    for i in search_scopes {
+                        if let Some(val) = self.variables[i].get(var_name) {
+                            return Ok(val.clone());
+                        }
+                    }
+                }
                 let resolved = self.resolve_var(s, jobs)?;
                 if let Ok(i) = resolved.parse::<i32>() {
                     Ok(IshValue::Int(i))
@@ -291,8 +325,8 @@ impl Executor {
                 };
                 Ok(IshValue::Bool(success))
             }
-            _ => {
-                let out = self.capture_output(node, jobs)?;
+            AstNodeKind::Subshell(inner) => {
+                let out = self.capture_output(inner, jobs)?;
                 if let Ok(i) = out.parse::<i32>() {
                     Ok(IshValue::Int(i))
                 } else if let Ok(f) = out.parse::<f32>() {
@@ -307,6 +341,53 @@ impl Executor {
                     Ok(IshValue::String(out))
                 }
             }
+            AstNodeKind::Command { program, args, .. } => {
+                if program.starts_with('$') && args.is_empty() {
+                    let resolved = self.resolve_var(program, jobs)?;
+                    if let Ok(i) = resolved.parse::<i32>() {
+                        Ok(IshValue::Int(i))
+                    } else if let Ok(f) = resolved.parse::<f32>() {
+                        Ok(IshValue::Float(f))
+                    } else if resolved == "true" {
+                        Ok(IshValue::Bool(true))
+                    } else if resolved == "false" {
+                        Ok(IshValue::Bool(false))
+                    } else if resolved == "null" {
+                        Ok(IshValue::Null)
+                    } else {
+                        Ok(IshValue::String(resolved))
+                    }
+                } else if args.is_empty() && (program.parse::<f64>().is_ok() || program == "true" || program == "false" || program == "null") {
+                    if let Ok(i) = program.parse::<i32>() {
+                        Ok(IshValue::Int(i))
+                    } else if let Ok(f) = program.parse::<f32>() {
+                        Ok(IshValue::Float(f))
+                    } else if program == "true" {
+                        Ok(IshValue::Bool(true))
+                    } else if program == "false" {
+                        Ok(IshValue::Bool(false))
+                    } else {
+                        Ok(IshValue::Null)
+                    }
+                } else {
+                    self.return_value = None;
+                    self.execute_node_with_input(node, "", None, jobs)?;
+                    if let Some(val) = self.return_value.take() {
+                        Ok(val)
+                    } else {
+                        Ok(IshValue::Null)
+                    }
+                }
+            }
+            _ => {
+                self.return_value = None;
+                self.execute_node_with_input(node, "", None, jobs)?;
+                if let Some(val) = self.return_value.take() {
+                    Ok(val)
+                } else {
+                    Ok(IshValue::Null)
+                }
+            }
         }
     }
 
@@ -318,15 +399,21 @@ impl Executor {
     fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> 
     {
         match &node.kind {
+            AstNodeKind::Subshell(inner) => {
+                let val = self.evaluate_node(inner, jobs)?;
+                self.return_value = Some(val);
+                Ok(true)
+            }
             AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
                 let resolved_program = self.resolve_var(program, jobs)?;
                 let mut resolved_args = Vec::new();
                 for arg in args {
-                    resolved_args.push(self.resolve_var(arg, jobs)?);
+                                resolved_args.push(self.resolve_var(arg, jobs)?);
                 }
 
                 if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
                     self.variables.push(HashMap::new());
+                    self.function_bases.push(self.variables.len() - 1);
                     
                     if let Some(scope) = self.variables.last_mut() {
                         for (i, param) in params.iter().enumerate() {
@@ -346,6 +433,7 @@ impl Executor {
                     }
 
                     self.returning = false;
+                    self.function_bases.pop();
                     self.variables.pop();
                     self.last_exit_code = if success { 0 } else { 1 };
                     return Ok(success);
@@ -590,6 +678,7 @@ impl Executor {
 
                         if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
                             self.variables.push(HashMap::new());
+                            self.function_bases.push(self.variables.len() - 1);
                             if let Some(scope) = self.variables.last_mut() {
                                 for (i, param) in params.iter().enumerate() {
                                     if i < resolved_args.len() {
@@ -607,6 +696,7 @@ impl Executor {
                                 success = self.execute_node_with_input(stmt, input, out_file, jobs)?;
                             }
                             self.returning = false;
+                            self.function_bases.pop();
                             self.variables.pop();
                             self.last_exit_code = if success { 0 } else { 1 };
                             last_cmd_success = success;
@@ -1008,13 +1098,18 @@ impl Executor {
                 Ok(block_success)
             }
             AstNodeKind::For { variable, iterable, body } => {
-                let items = self.capture_output(iterable, jobs)?;
+                let iterable_val = self.evaluate_node(iterable, jobs)?;
+                let items: Vec<String> = match iterable_val {
+                    IshValue::Array(arr) => arr.iter().map(|v| v.to_string()).collect(),
+                    IshValue::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
+                    _ => vec![iterable_val.to_string()],
+                };
                 let mut block_success = true;
-                for item in items.split_whitespace() {
+                for item in items {
                     if self.returning || self.breaking { break; }
                     self.variables.push(HashMap::new());
                     if let Some(scope) = self.variables.last_mut() {
-                        scope.insert(variable.clone(), IshValue::String(item.to_string()));
+                        scope.insert(variable.clone(), IshValue::String(item));
                     }
                     for stmt in body {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
@@ -1117,15 +1212,18 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::Return(inner) => {
-                let success = self.execute_node_with_input(inner, input, out_file, jobs)?;
+                let val = self.evaluate_node(inner, jobs)?;
+                self.return_value = Some(val);
                 self.returning = true;
-                Ok(success)
+                Ok(true)
             }
             AstNodeKind::Parallel(left, right) => {
                 let mut exec_left = Executor {
                     script_args: self.script_args.clone(),
                     last_exit_code: 0,
                     variables: self.variables.clone(),
+                    function_bases: vec![0],
+                    return_value: None,
                     functions: self.functions.clone(),
                     returning: false,
                     breaking: false,
@@ -1136,6 +1234,8 @@ impl Executor {
                     script_args: self.script_args.clone(),
                     last_exit_code: 0,
                     variables: self.variables.clone(),
+                    function_bases: vec![0],
+                    return_value: None,
                     functions: self.functions.clone(),
                     returning: false,
                     breaking: false,

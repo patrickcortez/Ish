@@ -25,7 +25,7 @@ out "Iterating through standard for loop:"
 let i = 0
 while ( $i < 3 ) {
     out "For iteration: $i"
-    let i = expr $i + 1
+    i = "$(( $i + 1 ))"
 }
 
 out "--- Test 03 Completed ---"

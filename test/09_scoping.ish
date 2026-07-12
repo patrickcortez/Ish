@@ -1,0 +1,18 @@
+declare global_var = "global"
+
+fn inner() {
+    out "Inner global_var: $global_var"
+    # out "Inner caller_var: $caller_var" # LINTER ERROR: caller_var is not in this scope
+}
+
+fn caller() {
+    declare caller_var = "caller"
+    inner
+}
+
+caller
+
+if ( 1 == 1 ) {
+    declare block_var = "block"
+}
+out "Block var: $block_var"
