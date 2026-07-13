@@ -16,11 +16,9 @@ The Ish shell is built around a custom AST parsing engine and comes with its own
 ## Core Syntax
 
 ### Piping
-Unlike standard POSIX shells, Ish allows using the colon `:` operator or the standard `|` for piping standard output between commands. More importantly, Ish pipes **JSON-structured data** (`IshValue`) under the hood, meaning objects stay structured!
+Like standard POSIX shells, Ish uses the standard `|` for piping standard output between commands. More importantly, Ish pipes **JSON-structured data** (`IshValue`) under the hood, meaning objects stay structured!
 ```bash
 > show . | str_tolower
-# OR
-> show . : str_tolower
 ```
 
 ### Sequential & Conditional Execution

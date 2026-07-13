@@ -172,7 +172,7 @@ impl Executor {
 
                 let mut var_name = String::new();
                 if let Some(&nc) = chars.peek() {
-                    if "?!@#$0".contains(nc) {
+                    if "?!$0".contains(nc) {
                         var_name.push(chars.next().unwrap());
                     } else {
                         while let Some(&nc) = chars.peek() {
@@ -193,10 +193,6 @@ impl Executor {
                     result.push_str(&std::process::id().to_string());
                 } else if var_name == "!" {
                     result.push_str(&jobs.last_job_pid());
-                } else if var_name == "#" {
-                    result.push_str(&self.script_args.len().to_string());
-                } else if var_name == "@" {
-                    result.push_str(&self.script_args.join(" "));
                 } else if var_name == "0" {
                     result.push_str("ish");
                 } else {
@@ -256,17 +252,6 @@ impl Executor {
                             result.push_str(&final_val.to_string());
                             found = true;
                             break;
-                        }
-                    }
-                    if !found {
-                        if let Ok(idx) = var_name.parse::<usize>() {
-                            if idx > 0 && idx <= self.script_args.len() {
-                                result.push_str(&self.script_args[idx - 1]);
-                                found = true;
-                            } else {
-                                // For unbound positional arguments like $1 where args are empty
-                                found = true; 
-                            }
                         }
                     }
                     if !found {

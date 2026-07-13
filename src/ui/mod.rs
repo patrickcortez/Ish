@@ -114,6 +114,7 @@ impl App {
 
         let mut executor = Executor::new(vec![]);
         executor.current_class = Some("Program".to_string());
+        let mut linter = Linter::new();
 
         loop {
             let os_icon = if std::env::consts::OS == "windows" { "\u{e70f} " } else if std::env::consts::OS == "macos" { "\u{f179} " } else { "\u{f17c} " };
@@ -472,27 +473,25 @@ impl App {
                     let mut parser = Parser::new(tokens);
                     match parser.parse() {
                         Ok(ast) => {
-                            let mut linter = Linter::new();
-                            if let Err(e) = linter.lint(&ast) {
-                                eprintln!("Lint Error: {}", e);
-                            } else {
-                                // Extract the statements from Program::Main and execute them in the global scope
-                                let mut stmts = Vec::new();
-                                if let crate::core::ast::AstNodeKind::ClassDecl { methods, .. } = ast.kind {
-                                    for m_node in methods {
-                                        if let crate::core::ast::AstNodeKind::Function { name, body, .. } = &m_node.kind {
-                                            if name == "Main" {
-                                                stmts = body.clone();
-                                                break;
-                                            }
+                            let mut stmts = Vec::new();
+                            if let crate::core::ast::AstNodeKind::ClassDecl { methods, .. } = ast.kind {
+                                for m_node in methods {
+                                    if let crate::core::ast::AstNodeKind::Function { name, body, .. } = &m_node.kind {
+                                        if name == "Main" {
+                                            stmts = body.clone();
+                                            break;
                                         }
                                     }
                                 }
+                            }
 
-                                for stmt in stmts {
-                                    if let Err(e) = executor.execute_node_with_input(&stmt, "", None, &mut self.jobs) {
-                                        eprintln!("Execution Error: {}", e);
-                                    }
+                            for stmt in stmts {
+                                if let Err(e) = linter.lint(&stmt) {
+                                    eprintln!("Lint Error: {}", e);
+                                    break;
+                                }
+                                if let Err(e) = executor.execute_node_with_input(&stmt, "", None, &mut self.jobs) {
+                                    eprintln!("Execution Error: {}", e);
                                 }
                             }
                         }
