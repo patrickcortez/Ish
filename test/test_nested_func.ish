@@ -1,0 +1,9 @@
+public static class Program {
+    public static func Main(params let[] args) {
+        out "Inside Main"
+        
+        func nested() {
+            out "Inside nested"
+        }
+    }
+}

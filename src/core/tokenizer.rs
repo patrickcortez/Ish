@@ -6,7 +6,8 @@ pub enum TokenKind {
     Subshell(String),
 
     // Ish custom syntax
-    Pipe,           // :
+    Pipe,           // |
+    Colon,          // :
     RedirectTo,     // to
     RedirectFrom,   // from
     AppendTo,       // append to
@@ -130,8 +131,12 @@ impl Tokenizer {
             let ch = self.input[self.position];
 
             let kind = match ch {
-                ':' | '|' => {
-                    if ch == '|' && self.position + 1 < self.input.len() && self.input[self.position + 1] == '|' {
+                ':' => {
+                    self.advance();
+                    TokenKind::Colon
+                }
+                '|' => {
+                    if self.position + 1 < self.input.len() && self.input[self.position + 1] == '|' {
                         self.advance();
                         self.advance();
                         TokenKind::OrElse

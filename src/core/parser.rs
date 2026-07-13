@@ -5,11 +5,12 @@ use crate::error::IshError;
 pub struct Parser {
     tokens: Vec<Token>,
     position: usize,
+    in_declaration_context: bool,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, position: 0 }
+        Self { tokens, position: 0, in_declaration_context: true }
     }
 
     pub fn parse(&mut self) -> Result<AstNode, IshError> {
@@ -129,9 +130,15 @@ impl Parser {
                 TokenKind::For | TokenKind::Foreach => self.parse_for_loop(),
                 TokenKind::WhileAsync => self.parse_while_loop(),
                 TokenKind::Public | TokenKind::Private | TokenKind::Protected | TokenKind::Internal | TokenKind::Static => {
+                    if !self.in_declaration_context {
+                        return Err(IshError::ParseError("Declarations (func, class, struct, enum) are not allowed inside methods or blocks.".to_string()));
+                    }
                     self.parse_declaration()
                 }
                 TokenKind::Class | TokenKind::Struct | TokenKind::Function | TokenKind::Enum => {
+                    if !self.in_declaration_context {
+                        return Err(IshError::ParseError("Declarations (func, class, struct, enum) are not allowed inside methods or blocks.".to_string()));
+                    }
                     self.parse_declaration()
                 }
                 TokenKind::With => self.parse_with_import(),
@@ -665,6 +672,9 @@ impl Parser {
             _ => return Err(IshError::ParseError("Expected '{' for block".to_string())),
         }
         
+        let old_context = self.in_declaration_context;
+        self.in_declaration_context = false;
+        
         let mut stmts = Vec::new();
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::RBrace) {
@@ -674,8 +684,15 @@ impl Parser {
                 self.consume();
                 continue;
             }
-            stmts.push(self.parse_logical()?);
+            let stmt_res = self.parse_logical();
+            if stmt_res.is_err() {
+                self.in_declaration_context = old_context;
+                return stmt_res.map(|x| vec![x]); // bubble up error
+            }
+            stmts.push(stmt_res.unwrap());
         }
+        
+        self.in_declaration_context = old_context;
         
         match self.consume() {
             Some(tok) if matches!(tok.kind, TokenKind::RBrace) => {}
@@ -779,16 +796,27 @@ impl Parser {
         if let Some(tok) = self.peek() {
             if let TokenKind::Word(w) = &tok.kind {
                 if w == "Map" && self.position + 1 < self.tokens.len() && matches!(self.tokens[self.position + 1].kind, TokenKind::LParen) {
-                    self.consume();
-                    self.consume();
+                    self.consume(); // Map
+                    self.consume(); // (
+                    
+                    if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBrace)) {
+                        return Err(IshError::ParseError("Expected '{' after 'Map('".to_string()));
+                    }
+                    self.consume(); // {
+                    
                     let mut items = Vec::new();
-                    while self.position < self.tokens.len() && !matches!(self.tokens[self.position].kind, TokenKind::RParen) {
-                        let key_node = self.parse_pipeline()?;
-                        if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
+                    while self.position < self.tokens.len() && !matches!(self.tokens[self.position].kind, TokenKind::RBrace) {
+                        if matches!(self.tokens[self.position].kind, TokenKind::Semicolon) {
                             self.consume();
-                        } else {
-                            return Err(IshError::ParseError("Expected comma after Map key".to_string()));
+                            continue;
                         }
+                        let key_node = self.parse_pipeline()?;
+                        if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Colon) {
+                            self.consume(); // :
+                        } else {
+                            return Err(IshError::ParseError("Expected ':' after Map key".to_string()));
+                        }
+                        
                         let val_node = self.parse_pipeline()?;
                         
                         let key_str = match &key_node.kind {
@@ -800,12 +828,16 @@ impl Parser {
                         items.push((key_str, val_node));
 
                         if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
-                            self.consume();
+                            self.consume(); // ,
                         }
                     }
                     if self.position < self.tokens.len() {
-                        self.consume();
+                        self.consume(); // }
                     }
+                    if !matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
+                        return Err(IshError::ParseError("Expected ')' after 'Map({...}'".to_string()));
+                    }
+                    self.consume(); // )
                     return Ok(AstNode::new(AstNodeKind::Map(items), line, col));
                 }
             }
@@ -906,7 +938,8 @@ impl Parser {
                                 break;
                             } else {
                                 match &tok.kind {
-                                    TokenKind::Word(w) | TokenKind::StringLiteral(w) => result.push_str(w),
+                                    TokenKind::Word(w) => result.push_str(w),
+                                    TokenKind::StringLiteral(w) => result.push_str(&format!("\"{}\"", w)),
                                     TokenKind::Variable(iv) => result.push_str(&format!("${}", iv)),
                                     _ => {}
                                 }
@@ -1012,7 +1045,8 @@ impl Parser {
                                 break;
                             } else {
                                 match &tok.kind {
-                                    TokenKind::Word(w) | TokenKind::StringLiteral(w) => var_str.push_str(w),
+                                    TokenKind::Word(w) => var_str.push_str(w),
+                                    TokenKind::StringLiteral(w) => var_str.push_str(&format!("\"{}\"", w)),
                                     TokenKind::Variable(iv) => var_str.push_str(&format!("${}", iv)),
                                     _ => {}
                                 }

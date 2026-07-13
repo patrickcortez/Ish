@@ -193,14 +193,27 @@ impl Executor {
                                     if c == ']' { chars.next(); break; }
                                     idx_str.push(chars.next().unwrap());
                                 }
+                                
+                                let trimmed = idx_str.trim().to_string();
+                                let resolved_idx = if trimmed.starts_with('"') && trimmed.ends_with('"') {
+                                    trimmed[1..trimmed.len()-1].to_string()
+                                } else if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+                                    trimmed[1..trimmed.len()-1].to_string()
+                                } else if trimmed.starts_with('$') {
+                                    self.resolve_var(&trimmed, jobs)?
+                                } else if trimmed.parse::<usize>().is_ok() {
+                                    trimmed
+                                } else {
+                                    return Err(IshError::ExecutionError(format!("Map/Array index must be in quotes, a number, or a variable. Found: [{}]", idx_str)));
+                                };
                                 if let IshValue::Array(arr) = &final_val {
-                                    if let Ok(idx) = idx_str.parse::<usize>() {
+                                    if let Ok(idx) = resolved_idx.parse::<usize>() {
                                         if let Some(v) = arr.get(idx) {
                                             final_val = v.clone();
                                         }
                                     }
                                 } else if let IshValue::Map(m) = &final_val {
-                                    if let Some(v) = m.get(&idx_str) {
+                                    if let Some(v) = m.get(&resolved_idx) {
                                         final_val = v.clone();
                                     }
                                 }
