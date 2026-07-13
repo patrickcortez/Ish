@@ -1,0 +1,13 @@
+public static class Program{
+    public static func Main(params let[] args){
+        let mymap = Map("name", "Luigi", "role", "Brother")
+        
+        out "Hello $mymap[name]"
+        
+        if( $mymap[name] == "Luigi" ){
+            out "It's Luigi time!"
+        }
+        
+        out "Role is $mymap[\"role\"]"
+    }
+}

@@ -894,7 +894,28 @@ impl Parser {
                     }
                     
                     is_string_literal = true;
-                    format!("${}", v)
+                    let mut result = format!("${}", v);
+                    
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBracket)) {
+                        self.consume(); // [
+                        result.push('[');
+                        while let Some(tok) = self.peek() {
+                            if matches!(tok.kind, TokenKind::RBracket) {
+                                self.consume();
+                                result.push(']');
+                                break;
+                            } else {
+                                match &tok.kind {
+                                    TokenKind::Word(w) | TokenKind::StringLiteral(w) => result.push_str(w),
+                                    TokenKind::Variable(iv) => result.push_str(&format!("${}", iv)),
+                                    _ => {}
+                                }
+                                self.consume();
+                            }
+                        }
+                    }
+                    
+                    result
                 }
                 TokenKind::Subshell(w) => {
                     let p = w.clone();
@@ -979,8 +1000,27 @@ impl Parser {
                     self.consume();
                 }
                 TokenKind::Variable(var) => {
-                    args.push(format!("${}", var));
+                    let mut var_str = format!("${}", var);
                     self.consume();
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBracket)) {
+                        self.consume(); // [
+                        var_str.push('[');
+                        while let Some(tok) = self.peek() {
+                            if matches!(tok.kind, TokenKind::RBracket) {
+                                self.consume();
+                                var_str.push(']');
+                                break;
+                            } else {
+                                match &tok.kind {
+                                    TokenKind::Word(w) | TokenKind::StringLiteral(w) => var_str.push_str(w),
+                                    TokenKind::Variable(iv) => var_str.push_str(&format!("${}", iv)),
+                                    _ => {}
+                                }
+                                self.consume();
+                            }
+                        }
+                    }
+                    args.push(var_str);
                 }
                 TokenKind::AppendTo => {
                     self.consume();

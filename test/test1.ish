@@ -1,0 +1,10 @@
+public static class Program{
+public static func Main(params let[] args){
+out "Your name is $args[0]"
+if( $args[0] == "Mario" ){
+out "Nice name $args[0]"
+}else{
+out "Cool name $args[0]"
+}
+}
+}
