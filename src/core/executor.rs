@@ -49,42 +49,55 @@ impl Executor {
 
     fn pop_scope(&mut self, jobs: &mut JobController) -> Result<(), IshError> {
         self.variables.pop();
-        let finalized = self.gobbler.collect(&self.variables, &self.static_variables);
-        for (id, class_name, properties) in finalized {
+        let finalized = self.gobbler.collect(&self.variables, &self.static_variables, self.return_value.as_ref());
+        for (_id, class_name, properties) in finalized {
             let class_def = self.registry.resolve_class(&class_name).cloned();
-            if let Some(cdef) = class_def {
-                if let Some(destructor_body) = cdef.destructor {
-                    self.variables.push(HashMap::new());
-                    self.function_bases.push(self.variables.len() - 1);
-                    if let Some(dest_scope) = self.variables.last_mut() {
-                        dest_scope.insert("this".to_string(), IshValue::Reference(id));
-                        // Wait, we just freed 'id'. But the destructor needs 'this'. 
-                        // So we should TEMPORARILY insert the object back into the heap for the destructor?
-                        // Or we pass properties as a temporary heap object?
-                        // Let's create a temporary object on the heap for the destructor to use.
-                        let temp_id = self.gobbler.allocate(HeapObject::Object {
-                            class_name: class_name.clone(),
-                            properties,
-                        });
-                        dest_scope.insert("this".to_string(), IshValue::Reference(temp_id));
-                        // the temp_id will be swept on the next pop_scope. But we must be careful not to double call destructor.
-                        // we can manually free it.
-                    }
-                    let prev_class = self.current_class.clone();
-                    self.current_class = Some(cdef.qualified_name.clone());
-                    
-                    for stmt in destructor_body {
-                        let _ = self.execute_node_with_input(&stmt, "", None, jobs);
-                    }
-                    
-                    self.function_bases.pop();
-                    if let Some(dest_scope) = self.variables.pop() {
-                        if let Some(IshValue::Reference(temp_id)) = dest_scope.get("this") {
-                            self.gobbler.free(*temp_id);
-                        }
-                    }
-                    self.current_class = prev_class;
+            let struct_def = if class_def.is_none() {
+                self.registry.resolve_struct(&class_name).cloned()
+            } else {
+                None
+            };
+            
+            let destructor_opt = if let Some(cdef) = &class_def {
+                cdef.destructor.clone()
+            } else if let Some(sdef) = &struct_def {
+                sdef.destructor.clone()
+            } else {
+                None
+            };
+            
+            let qual_name = if let Some(cdef) = &class_def {
+                cdef.qualified_name.clone()
+            } else if let Some(sdef) = &struct_def {
+                sdef.qualified_name.clone()
+            } else {
+                class_name.clone()
+            };
+
+            if let Some(destructor_body) = destructor_opt {
+                self.variables.push(HashMap::new());
+                self.function_bases.push(self.variables.len() - 1);
+                if let Some(dest_scope) = self.variables.last_mut() {
+                    let temp_id = self.gobbler.allocate(HeapObject::Object {
+                        class_name: class_name.clone(),
+                        properties,
+                    });
+                    dest_scope.insert("this".to_string(), IshValue::Reference(temp_id));
                 }
+                let prev_class = self.current_class.clone();
+                self.current_class = Some(qual_name);
+                
+                for stmt in destructor_body {
+                    let _ = self.execute_node_with_input(&stmt, "", None, jobs);
+                }
+                
+                self.function_bases.pop();
+                if let Some(dest_scope) = self.variables.pop() {
+                    if let Some(IshValue::Reference(temp_id)) = dest_scope.get("this") {
+                        self.gobbler.free(*temp_id);
+                    }
+                }
+                self.current_class = prev_class;
             }
         }
         Ok(())
@@ -318,8 +331,8 @@ impl Executor {
     pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
             AstNodeKind::StringLiteral(s) => {
-                if s.starts_with('$') && !s.contains(" ") && !s.contains("(") && !s.contains("{") {
-                    let var_name = &s[1..];
+                if (s.starts_with('$') || s == "this") && !s.contains(" ") && !s.contains("(") && !s.contains("{") {
+                    let var_name = if s == "this" { "this" } else { &s[1..] };
                     let base_idx = *self.function_bases.last().unwrap_or(&0);
                     let mut search_scopes = vec![];
                     for i in (base_idx..self.variables.len()).rev() {
@@ -643,6 +656,20 @@ impl Executor {
         }
     }
 
+    pub fn resolve_callable(&self, program: &str) -> Option<(Vec<crate::core::ast::Param>, Vec<AstNode>)> {
+        if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(program).cloned() {
+            return Some((params, body));
+        }
+        if let Some(class_name) = &self.current_class {
+            if let Some(class_def) = self.registry.resolve_class(class_name) {
+                if let Some(method) = class_def.methods.get(program) {
+                    return Some((method.params.clone(), method.body.clone()));
+                }
+            }
+        }
+        None
+    }
+
     pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError>
     {
         match &node.kind {
@@ -658,7 +685,7 @@ impl Executor {
                                 resolved_args.push(self.resolve_var(arg, jobs)?);
                 }
 
-                if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
+                if let Some((params, body)) = self.resolve_callable(&resolved_program) {
                     let mut evaluated_params = Vec::new();
                     let mut arg_idx = 0;
                     for param in &params {
@@ -685,10 +712,21 @@ impl Executor {
                         }
                     }
 
+                    let mut this_val = None;
+                    for scope in self.variables.iter().rev() {
+                        if let Some(val) = scope.get("this") {
+                            this_val = Some(val.clone());
+                            break;
+                        }
+                    }
+
                     self.variables.push(HashMap::new());
                     self.function_bases.push(self.variables.len() - 1);
                     
                     if let Some(scope) = self.variables.last_mut() {
+                        if let Some(t) = this_val {
+                            scope.insert("this".to_string(), t);
+                        }
                         for (k, v) in evaluated_params {
                             scope.insert(k, v);
                         }
@@ -943,7 +981,7 @@ impl Executor {
                             resolved_args.push(self.resolve_var(arg, jobs)?);
                         }
 
-                        if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
+                        if let Some((params, body)) = self.resolve_callable(&resolved_program) {
                             let mut evaluated_params = Vec::new();
                             let mut arg_idx = 0;
                             for param in &params {
@@ -970,9 +1008,20 @@ impl Executor {
                                 }
                             }
 
+                            let mut this_val = None;
+                            for scope in self.variables.iter().rev() {
+                                if let Some(val) = scope.get("this") {
+                                    this_val = Some(val.clone());
+                                    break;
+                                }
+                            }
+
                             self.variables.push(HashMap::new());
                             self.function_bases.push(self.variables.len() - 1);
                             if let Some(scope) = self.variables.last_mut() {
+                                if let Some(t) = this_val {
+                                    scope.insert("this".to_string(), t);
+                                }
                                 for (k, v) in evaluated_params {
                                     scope.insert(k, v);
                                 }
@@ -1339,6 +1388,36 @@ impl Executor {
                         scope.insert(variable.clone(), val);
                     }
                 } else {
+                    if variable.contains('.') {
+                        let parts: Vec<&str> = variable.split('.').collect();
+                        let obj_name = parts[0];
+                        let prop_name = parts[1];
+                        
+                        let mut obj_id = None;
+                        for scope in self.variables.iter().rev() {
+                            if let Some(existing) = scope.get(obj_name) {
+                                if let IshValue::Reference(id) = existing {
+                                    obj_id = Some(*id);
+                                }
+                                break;
+                            }
+                        }
+                        
+                        if let Some(id) = obj_id {
+                            if let Some(heap_obj) = self.gobbler.get_mut(id) {
+                                match heap_obj {
+                                    crate::core::gobbler::HeapObject::Map(m) | crate::core::gobbler::HeapObject::Object { properties: m, .. } => {
+                                        m.insert(prop_name.to_string(), val.clone());
+                                        return Ok(true);
+                                    }
+                                    _ => return Err(IshError::ExecutionError(format!("Cannot assign property on non-object '{}'", obj_name))),
+                                }
+                            }
+                        } else {
+                            return Err(IshError::ExecutionError(format!("Object '{}' not found", obj_name)));
+                        }
+                    }
+
                     let mut found = false;
                     for scope in self.variables.iter_mut().rev() {
                         if scope.contains_key(variable) {
@@ -1590,23 +1669,35 @@ impl Executor {
                     return Ok(true);
                 }
                 
-                let class_def = self.registry.resolve_class(class_name).cloned()
-                    .ok_or_else(|| IshError::ExecutionError(format!(
-                        "Class '{}' is not defined.", class_name
-                    )))?;
+                let class_def = self.registry.resolve_class(class_name).cloned();
+                let struct_def = if class_def.is_none() {
+                    self.registry.resolve_struct(class_name).cloned()
+                } else {
+                    None
+                };
 
-                if class_def.is_static {
+                if class_def.is_none() && struct_def.is_none() {
                     return Err(IshError::ExecutionError(format!(
-                        "Cannot instantiate static class '{}'.", class_name
+                        "Class or Struct '{}' is not defined.", class_name
                     )));
                 }
 
-                // Check access
-                Registry::check_access(&class_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                if let Some(cdef) = &class_def {
+                    if cdef.is_static {
+                        return Err(IshError::ExecutionError(format!(
+                            "Cannot instantiate static class '{}'.", class_name
+                        )));
+                    }
+                    Registry::check_access(&cdef.access, self.current_class.as_deref(), &cdef.qualified_name)?;
+                } else if let Some(sdef) = &struct_def {
+                    Registry::check_access(&sdef.access, self.current_class.as_deref(), &sdef.qualified_name)?;
+                }
 
-                // Build default properties from field definitions
+                let fields = if let Some(cdef) = &class_def { &cdef.fields } else { &struct_def.as_ref().unwrap().fields };
+                let constructor = if let Some(cdef) = &class_def { &cdef.constructor } else { &struct_def.as_ref().unwrap().constructor };
+
                 let mut properties = HashMap::new();
-                for (fname, fdef) in &class_def.fields {
+                for (fname, fdef) in fields {
                     let val = if let Some(default_node) = &fdef.default_value {
                         self.evaluate_node(default_node, jobs)?
                     } else {
@@ -1615,43 +1706,75 @@ impl Executor {
                     properties.insert(fname.clone(), val);
                 }
 
-                // If there's a constructor, call it with the provided args
                 let mut eval_args = Vec::new();
                 for arg_node in args {
                     eval_args.push(self.evaluate_node(arg_node, jobs)?);
                 }
 
-                if let Some(constructor_body) = &class_def.constructor {
-                    // Push a scope for constructor execution
+                let mut evaluated_params = Vec::new();
+                if let Some((_, params, _)) = constructor {
+                    let mut arg_idx = 0;
+                    for param in params {
+                        if param.is_variadic {
+                            let mut variadic_arr = Vec::new();
+                            while arg_idx < eval_args.len() {
+                                variadic_arr.push(eval_args[arg_idx].clone());
+                                arg_idx += 1;
+                            }
+                            let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                            evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
+                        } else {
+                            if arg_idx < eval_args.len() {
+                                evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
+                                arg_idx += 1;
+                            } else {
+                                if let Some(default_expr) = &param.default_value {
+                                    let val = self.evaluate_node(default_expr, jobs)?;
+                                    evaluated_params.push((param.name.clone(), val));
+                                } else {
+                                    evaluated_params.push((param.name.clone(), IshValue::Null));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some((acc, _, constructor_body)) = constructor {
+                    let qual_name = if let Some(cdef) = &class_def { &cdef.qualified_name } else { &struct_def.as_ref().unwrap().qualified_name };
+                    Registry::check_access(acc, self.current_class.as_deref(), qual_name)?;
+
                     self.variables.push(HashMap::new());
                     self.function_bases.push(self.variables.len() - 1);
                     if let Some(scope) = self.variables.last_mut() {
-                        // Bind `this` as properties map
                         let obj_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Object {
                             class_name: class_name.clone(),
                             properties: properties.clone(),
                         });
                         scope.insert("this".to_string(), IshValue::Reference(obj_ref));
-                        // Assume no params for constructor yet, or parse them later
+                        
+                        for (pname, pval) in evaluated_params {
+                            scope.insert(pname, pval);
+                        }
                     }
                     let prev_class = self.current_class.clone();
-                    self.current_class = Some(class_def.qualified_name.clone());
+                    self.current_class = Some(qual_name.clone());
                     for stmt in constructor_body {
                         self.execute_node_with_input(stmt, "", None, jobs)?;
                         if self.returning { break; }
                     }
-                    // Extract potentially-modified `this`
+                    let mut final_obj_ref = 0;
                     if let Some(scope) = self.variables.last() {
                         if let Some(IshValue::Reference(id)) = scope.get("this") {
-                            if let Some(crate::core::gobbler::HeapObject::Object { properties: p, .. }) = self.gobbler.get(*id) {
-                                properties = p.clone();
-                            }
+                            final_obj_ref = *id;
                         }
                     }
+                    self.return_value = Some(IshValue::Reference(final_obj_ref));
+
                     self.returning = false;
                     self.function_bases.pop();
                     let _ = self.pop_scope(jobs);
                     self.current_class = prev_class;
+                    return Ok(true);
                 }
 
                 let obj_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Object {
@@ -1664,7 +1787,27 @@ impl Executor {
 
             // ---- OOP: Method Call ----
             AstNodeKind::MethodCall { object, method_name, args } => {
-                let obj_val = self.evaluate_node(object, jobs)?;
+                let mut obj_val = self.evaluate_node(object, jobs)?;
+                
+                if let IshValue::String(ref s) = obj_val {
+                    if s == "___implicit___" {
+                        let mut has_this = false;
+                        for scope in self.variables.iter().rev() {
+                            if let Some(t) = scope.get("this") {
+                                obj_val = t.clone();
+                                has_this = true;
+                                break;
+                            }
+                        }
+                        if !has_this {
+                            if let Some(c) = &self.current_class {
+                                obj_val = IshValue::String(c.clone());
+                            } else {
+                                return Err(IshError::ExecutionError(format!("Implicit method call '{}' outside of class.", method_name)));
+                            }
+                        }
+                    }
+                }
                 
                 // Evaluate arguments before borrowing Gobbler
                 let mut eval_args = Vec::new();

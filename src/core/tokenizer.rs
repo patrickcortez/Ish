@@ -58,8 +58,6 @@ pub enum TokenKind {
     New,
     With,
     Enum,
-    Constructor,
-    Destructor,
     Params,
     List,
 
@@ -343,8 +341,6 @@ impl Tokenizer {
                             "new" => TokenKind::New,
                             "with" => TokenKind::With,
                             "enum" => TokenKind::Enum,
-                            "constructor" => TokenKind::Constructor,
-                            "destructor" => TokenKind::Destructor,
                             "params" => TokenKind::Params,
                             "List" => TokenKind::List,
                             _ => TokenKind::Word(word),

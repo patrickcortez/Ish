@@ -181,7 +181,7 @@ pub enum AstNodeKind {
         is_static: bool,
         methods: Vec<AstNode>,
         fields: Vec<AstNode>,
-        constructor: Option<Vec<AstNode>>,
+        constructor: Option<(AccessSpecifier, Vec<Param>, Vec<AstNode>)>,
         destructor: Option<Vec<AstNode>>,
     },
 
@@ -190,6 +190,8 @@ pub enum AstNodeKind {
         name: String,
         access: AccessSpecifier,
         fields: Vec<AstNode>,
+        constructor: Option<(AccessSpecifier, Vec<Param>, Vec<AstNode>)>,
+        destructor: Option<Vec<AstNode>>,
     },
 
     /// OOP: Enum Declaration

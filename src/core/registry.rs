@@ -11,7 +11,7 @@ pub struct ClassDef {
     pub is_static: bool,
     pub methods: HashMap<String, MethodDef>,
     pub fields: HashMap<String, FieldDef>,
-    pub constructor: Option<Vec<AstNode>>,
+    pub constructor: Option<(AccessSpecifier, Vec<crate::core::ast::Param>, Vec<AstNode>)>,
     pub destructor: Option<Vec<AstNode>>,
 }
 
@@ -22,6 +22,8 @@ pub struct StructDef {
     pub qualified_name: String,
     pub access: AccessSpecifier,
     pub fields: HashMap<String, FieldDef>,
+    pub constructor: Option<(AccessSpecifier, Vec<crate::core::ast::Param>, Vec<AstNode>)>,
+    pub destructor: Option<Vec<AstNode>>,
 }
 
 /// Represents a method within a class.
@@ -139,7 +141,7 @@ impl Registry {
                     destructor: destructor.clone(),
                 });
             }
-            AstNodeKind::StructDecl { name, access, fields } => {
+            AstNodeKind::StructDecl { name, access, fields, constructor, destructor } => {
                 let qualified_name = self.qualify_name(name);
                 let mut field_map = HashMap::new();
 
@@ -158,6 +160,8 @@ impl Registry {
                     qualified_name,
                     access: access.clone(),
                     fields: field_map,
+                    constructor: constructor.clone(),
+                    destructor: destructor.clone(),
                 });
             }
             AstNodeKind::EnumDecl { name, access, variants } => {

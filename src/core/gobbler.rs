@@ -47,11 +47,16 @@ impl Gobbler {
 
     /// Mark and Sweep Garbage Collection
     /// Returns a list of (object_id, class_name, properties) for objects that were swept and might need their destructors called.
-    pub fn collect(&mut self, stack_roots: &[HashMap<String, IshValue>], static_roots: &HashMap<String, IshValue>) -> Vec<(usize, String, HashMap<String, IshValue>)> {
+    pub fn collect(&mut self, stack_roots: &[HashMap<String, IshValue>], static_roots: &HashMap<String, IshValue>, return_value: Option<&IshValue>) -> Vec<(usize, String, HashMap<String, IshValue>)> {
         let mut marked = HashSet::new();
         let mut worklist = Vec::new();
 
         // 1. Root Collection
+        if let Some(IshValue::Reference(id)) = return_value {
+            if marked.insert(*id) {
+                worklist.push(*id);
+            }
+        }
         for scope in stack_roots {
             for (_, val) in scope {
                 if let IshValue::Reference(id) = val {

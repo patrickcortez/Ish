@@ -1,0 +1,52 @@
+namespace App {
+    public class Person {
+        let name = "";
+        let age = 0;
+
+        public func Person(let name, let age) {
+            this.name = $name;
+            this.age = $age;
+            out "Person created: $name"
+        }
+
+        public func introduce() {
+            let $n = this.name
+            let $a = this.age
+            out "Hi, I am $n and I am $a years old."
+            return 0
+        }
+    }
+
+    public struct Point {
+        let x = 0;
+        let y = 0;
+
+        public func Point(let x, let y) {
+            this.x = $x;
+            this.y = $y;
+            out "Point created!"
+        }
+
+        public func ~Point() {
+            out "Point destroyed!"
+        }
+    }
+
+    public static class Program {
+        public static func test_struct() {
+            let $p = new Point(10, 20);
+            out "Inside test_struct..."
+            return 0
+        }
+
+        public static func Main(params let[] args) {
+            out "=== OOP Constructor Test ==="
+            let $p1 = new Person("Alice", 30);
+            $p1.introduce();
+
+            test_struct();
+            out "=== Done ==="
+            return 0
+        }
+    }
+}

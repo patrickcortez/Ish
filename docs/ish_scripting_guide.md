@@ -359,12 +359,58 @@ let current = Status.Pending
 ```
 
 ### Object Instantiation
-To create an instance of a standard (non-static) class, use the `new` keyword. You can access properties and methods using dot notation (`.`).
+To create an instance of a standard (non-static) class or struct, use the `new` keyword. You can access properties and methods using dot notation (`.`).
 
 ```bash
 let my_obj = new Utilities::Greeter()
 my_obj.say_hello("World")
 ```
+
+### Constructors & Destructors
+
+Constructors and destructors allow you to automatically run code when an object is created and destroyed. 
+
+**Constructors**
+A constructor is a special method that shares the exact same name as the class or struct. It is executed automatically when you create a new instance using the `new` keyword. You can use it to initialize properties.
+
+```bash
+public class Point {
+    # The constructor method
+    public func Point(let x, let y) {
+        this.x = $x
+        this.y = $y
+        out "Point created at ($x, $y)!"
+    }
+}
+
+let p = new Point(10, 20)
+```
+
+*How it works internally*: When `new Point(10, 20)` is called, Ish allocates a new memory reference on the heap, passes it to the constructor as `this`, and assigns your parameters to the object's scope.
+
+**Destructors**
+A destructor is a special method that shares the name of the class but is prefixed with a tilde `~`. It takes no arguments and is executed automatically when the object is destroyed by The Gobbler (our memory manager).
+
+```bash
+public class Connection {
+    public func Connection() {
+        out "Connected!"
+    }
+
+    # The destructor method
+    public func ~Connection() {
+        out "Disconnected!"
+    }
+}
+
+if ( true ) {
+    let conn = new Connection()
+} 
+# When the block ends, 'conn' goes out of scope. 
+# The destructor '~Connection()' runs automatically!
+```
+
+*How it works internally*: When a variable referencing the object goes out of scope, The Gobbler triggers a Mark-and-Sweep garbage collection. If the object is no longer reachable, The Gobbler automatically invokes the destructor before completely freeing the memory.
 
 ## Built-In Commands
 - `change <path>`: Change the current working directory.

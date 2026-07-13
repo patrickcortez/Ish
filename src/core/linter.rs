@@ -221,7 +221,7 @@ impl Linter {
                         scope.insert(variable.clone());
                     }
                 } else {
-                    if !self.is_var_defined(variable) {
+                    if !variable.contains('.') && !self.is_var_defined(variable) {
                         return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Variable '{}' is assigned before being declared", node.line, node.column, variable)));
                     }
                 }
@@ -314,14 +314,27 @@ impl Linter {
             }
             AstNodeKind::ClassDecl { methods, fields, constructor, destructor, .. } => {
                 if let Some(c) = constructor {
-                    for stmt in c {
+                    self.defined_vars.push(std::collections::HashSet::new());
+                    self.function_bases.push(self.defined_vars.len() - 1);
+                    if let Some(scope) = self.defined_vars.last_mut() {
+                        for param in &c.1 {
+                            scope.insert(param.name.clone());
+                        }
+                    }
+                    for stmt in &c.2 {
                         self.check_node(stmt)?;
                     }
+                    self.function_bases.pop();
+                    self.defined_vars.pop();
                 }
                 if let Some(d) = destructor {
+                    self.defined_vars.push(std::collections::HashSet::new());
+                    self.function_bases.push(self.defined_vars.len() - 1);
                     for stmt in d {
                         self.check_node(stmt)?;
                     }
+                    self.function_bases.pop();
+                    self.defined_vars.pop();
                 }
                 for method in methods {
                     self.check_node(method)?;
@@ -330,7 +343,30 @@ impl Linter {
                     self.check_node(field)?;
                 }
             }
-            AstNodeKind::StructDecl { fields, .. } => {
+            AstNodeKind::StructDecl { fields, constructor, destructor, .. } => {
+                if let Some(c) = constructor {
+                    self.defined_vars.push(std::collections::HashSet::new());
+                    self.function_bases.push(self.defined_vars.len() - 1);
+                    if let Some(scope) = self.defined_vars.last_mut() {
+                        for param in &c.1 {
+                            scope.insert(param.name.clone());
+                        }
+                    }
+                    for stmt in &c.2 {
+                        self.check_node(stmt)?;
+                    }
+                    self.function_bases.pop();
+                    self.defined_vars.pop();
+                }
+                if let Some(d) = destructor {
+                    self.defined_vars.push(std::collections::HashSet::new());
+                    self.function_bases.push(self.defined_vars.len() - 1);
+                    for stmt in d {
+                        self.check_node(stmt)?;
+                    }
+                    self.function_bases.pop();
+                    self.defined_vars.pop();
+                }
                 for field in fields {
                     self.check_node(field)?;
                 }

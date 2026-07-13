@@ -482,6 +482,13 @@ impl Parser {
                 TokenKind::Struct => self.parse_struct(access),
                 TokenKind::Function => self.parse_function(access, is_static),
                 TokenKind::Enum => self.parse_enum(access),
+                TokenKind::Let | TokenKind::Declare => {
+                    self.consume();
+                    let assign = self.parse_assignment(true, None)?;
+                    // Optional: we could attach `access` to the assignment if the AST supported it, 
+                    // but for now we just return the assignment.
+                    Ok(assign)
+                }
                 _ => Err(IshError::ParseError("Expected class, struct, enum, or function declaration after modifiers".to_string())),
             }
         } else {
@@ -523,34 +530,21 @@ impl Parser {
                 self.consume();
                 continue;
             }
-            if matches!(tok.kind, TokenKind::Constructor) {
-                self.consume(); // consume 'constructor'
-                // expect ()
-                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
-                    self.consume();
-                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
-                        self.consume();
-                    }
-                }
-                constructor = Some(self.parse_block()?);
-                continue;
-            }
-            if matches!(tok.kind, TokenKind::Destructor) {
-                self.consume(); // consume 'destructor'
-                // expect ()
-                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
-                    self.consume();
-                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
-                        self.consume();
-                    }
-                }
-                destructor = Some(self.parse_block()?);
-                continue;
-            }
-            // we expect methods or fields inside class
             let decl = self.parse_declaration()?;
             match decl.kind {
-                AstNodeKind::Function { .. } => methods.push(decl),
+                AstNodeKind::Function { name: ref fn_name, .. } => {
+                    if fn_name == &name {
+                        if let AstNodeKind::Function { access, params, body, .. } = decl.kind {
+                            constructor = Some((access, params, body));
+                        } else { unreachable!() }
+                    } else if fn_name == &format!("~{}", name) {
+                        if let AstNodeKind::Function { body, .. } = decl.kind {
+                            destructor = Some(body);
+                        } else { unreachable!() }
+                    } else {
+                        methods.push(decl);
+                    }
+                }
                 _ => fields.push(decl),
             }
         }
@@ -575,6 +569,12 @@ impl Parser {
         }
         
         let mut fields = Vec::new();
+        let mut constructor = None;
+        let mut destructor = None;
+
+        let old_context = self.in_declaration_context;
+        self.in_declaration_context = true;
+
         while let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::RBrace) {
                 self.consume();
@@ -584,27 +584,31 @@ impl Parser {
                 self.consume();
                 continue;
             }
-            // in a struct, maybe fields are declared with let
-            if matches!(tok.kind, TokenKind::Let) {
-                self.consume();
-                fields.push(self.parse_assignment(true, None)?);
-            } else if let TokenKind::Word(w) = &tok.kind {
-                let var_name = w.clone();
-                self.consume();
-                let is_decl = true;
-                let val = if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Assign)) {
-                    self.consume();
-                    self.parse_expression()?
-                } else {
-                    AstNode::new(AstNodeKind::StringLiteral("".to_string()), line, col)
-                };
-                fields.push(AstNode::new(AstNodeKind::Assignment { variable: var_name, index: None, value: Box::new(val), is_declaration: is_decl }, line, col));
-            } else {
-                return Err(IshError::ParseError("Expected field declaration in struct".to_string()));
+            
+            let decl = self.parse_declaration()?;
+            match decl.kind {
+                AstNodeKind::Function { name: ref fn_name, .. } => {
+                    if fn_name == &name {
+                        if let AstNodeKind::Function { access, params, body, .. } = decl.kind {
+                            constructor = Some((access, params, body));
+                        } else { unreachable!() }
+                    } else if fn_name == &format!("~{}", name) {
+                        if let AstNodeKind::Function { body, .. } = decl.kind {
+                            destructor = Some(body);
+                        } else { unreachable!() }
+                    } else {
+                        // Structs don't support arbitrary methods currently in Ish? But we just ignore them or push them.
+                        // For now we just drop it or return error? The old code returned error.
+                        return Err(IshError::ParseError("Expected field declaration in struct".to_string()));
+                    }
+                }
+                AstNodeKind::Assignment { .. } => fields.push(decl),
+                _ => return Err(IshError::ParseError("Expected field declaration in struct".to_string())),
             }
         }
         
-        Ok(AstNode::new(AstNodeKind::StructDecl { name, access, fields }, line, col))
+        self.in_declaration_context = old_context;
+        Ok(AstNode::new(AstNodeKind::StructDecl { name, access, fields, constructor, destructor }, line, col))
     }
 
     fn parse_enum(&mut self, access: crate::core::ast::AccessSpecifier) -> Result<AstNode, IshError> {
@@ -668,17 +672,7 @@ impl Parser {
         Ok(AstNode::new(AstNodeKind::WithImport { path }, line, col))
     }
 
-    fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
-        let (line, col) = self.get_location();
-        self.consume(); // Consume TokenKind::Function
-        let name = match self.consume() {
-            Some(tok) => match tok.kind {
-                TokenKind::Word(w) => w,
-                _ => return Err(IshError::ParseError("Expected function name".to_string())),
-            },
-            None => return Err(IshError::ParseError("Expected function name".to_string())),
-        };
-
+    fn parse_parameters(&mut self) -> Result<Vec<crate::core::ast::Param>, IshError> {
         let mut params = Vec::new();
         if let Some(tok) = self.peek() {
             if matches!(tok.kind, TokenKind::LParen) {
@@ -740,6 +734,21 @@ impl Parser {
                 }
             }
         }
+        Ok(params)
+    }
+
+    fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
+        let (line, col) = self.get_location();
+        self.consume(); // Consume TokenKind::Function
+        let name = match self.consume() {
+            Some(tok) => match tok.kind {
+                TokenKind::Word(w) => w,
+                _ => return Err(IshError::ParseError("Expected function name".to_string())),
+            },
+            None => return Err(IshError::ParseError("Expected function name".to_string())),
+        };
+
+        let params = self.parse_parameters()?;
 
         let body = self.parse_block()?;
         Ok(AstNode::new(AstNodeKind::Function { name, params, body, access, is_static }, line, col))
@@ -945,10 +954,14 @@ impl Parser {
                     self.consume();
                     if p.parse::<f64>().is_ok() || p == "true" || p == "false" || p == "null" {
                         is_string_literal = true;
-                    } else if p.contains('.') {
-                        let parts: Vec<&str> = p.splitn(2, '.').collect();
-                        let obj_name = parts[0].to_string();
-                        let member_name = parts[1].to_string();
+                    } else if p.contains('.') || matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                        let (obj_name, member_name) = if p.contains('.') {
+                            let parts: Vec<&str> = p.rsplitn(2, '.').collect();
+                            (parts[1].to_string(), parts[0].to_string())
+                        } else {
+                            ("___implicit___".to_string(), p.clone())
+                        };
+                        
                         
                         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
                             self.consume();
@@ -981,10 +994,13 @@ impl Parser {
                 TokenKind::Variable(v) => {
                     let v = v.clone();
                     self.consume();
-                    if v.contains('.') {
-                        let parts: Vec<&str> = v.splitn(2, '.').collect();
-                        let obj_name = format!("${}", parts[0]);
-                        let member_name = parts[1].to_string();
+                    if v.contains('.') || matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+                        let (obj_name, member_name) = if v.contains('.') {
+                            let parts: Vec<&str> = v.rsplitn(2, '.').collect();
+                            (format!("${}", parts[1]), parts[0].to_string())
+                        } else {
+                            ("___implicit___".to_string(), v.clone())
+                        };
                         
                         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
                             self.consume();
