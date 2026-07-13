@@ -28,6 +28,7 @@ pub enum TokenKind {
     GreaterOrEq,    // >=
     LessOrEq,       // <=
 
+    Question,       // ?
 
     // Scripting keywords
     If,
@@ -119,7 +120,7 @@ impl Tokenizer {
                 break;
             }
 
-            if self.input[self.position] == '#' {
+            if self.input[self.position] == '#' || (self.input[self.position] == '/' && self.position + 1 < self.input.len() && self.input[self.position + 1] == '/') {
                 while self.position < self.input.len() && self.input[self.position] != '\n' {
                     self.advance();
                 }
@@ -219,6 +220,10 @@ impl Tokenizer {
                     } else {
                         TokenKind::LessThan
                     }
+                }
+                '?' => {
+                    self.advance();
+                    TokenKind::Question
                 }
                 ',' => {
                     self.advance();
@@ -367,7 +372,7 @@ impl Tokenizer {
         let mut word = String::new();
         while self.position < self.input.len() {
             let ch = self.input[self.position];
-            if ch.is_whitespace() || "{}()[]=,:;\"'$!<>".contains(ch) {
+            if ch.is_whitespace() || "{}()[]=,:;\"'$!<>?".contains(ch) {
                 break;
             }
             word.push(ch);

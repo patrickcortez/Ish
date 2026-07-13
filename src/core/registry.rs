@@ -30,8 +30,7 @@ pub struct MethodDef {
     pub name: String,
     pub access: AccessSpecifier,
     pub is_static: bool,
-    pub params: Vec<String>,
-    pub has_params: bool,
+    pub params: Vec<crate::core::ast::Param>,
     pub body: Vec<AstNode>,
 }
 
@@ -108,13 +107,12 @@ impl Registry {
                 let mut field_map = HashMap::new();
 
                 for method_node in methods {
-                    if let AstNodeKind::Function { name: mname, params, has_params, body, access: maccess, is_static: mstatic } = &method_node.kind {
+                    if let AstNodeKind::Function { name: mname, params, body, access: maccess, is_static: mstatic } = &method_node.kind {
                         method_map.insert(mname.clone(), MethodDef {
                             name: mname.clone(),
                             access: maccess.clone(),
                             is_static: *mstatic,
                             params: params.clone(),
-                            has_params: *has_params,
                             body: body.clone(),
                         });
                     }
@@ -277,7 +275,7 @@ impl Registry {
                             "Entry point method 'Main' must be declared as 'public'.".to_string()
                         ));
                     }
-                    if !main_method.has_params {
+                    if !main_method.params.last().map_or(false, |p| p.is_variadic) {
                         return Err(IshError::ParseError(
                             "Entry point method 'Main' must have the 'params let[] args' signature.".to_string()
                         ));

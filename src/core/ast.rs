@@ -24,6 +24,14 @@ pub enum AccessSpecifier {
     Internal,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub is_array: bool,
+    pub is_variadic: bool,
+    pub default_value: Option<Box<AstNode>>,
+}
+
 impl IshValue {
     pub fn to_string(&self) -> String {
         match self {
@@ -244,16 +252,25 @@ pub enum AstNodeKind {
         is_declaration: bool,
     },
 
-    /// Binary Condition (e.g. `$a == "test"`)
-    Condition {
+    /// Binary Operation (e.g. `$a == "test"`, `$a + $b`)
+    BinaryOp {
         left: Box<AstNode>,
         operator: String,
         right: Box<AstNode>,
     },
 
+    /// Unary Operation (e.g. `!$a`, `-$b`)
+    UnaryOp {
+        operator: String,
+        operand: Box<AstNode>,
+    },
 
-
-    /// While loop
+    /// Ternary Operation (e.g. `$a ? $b : $c`)
+    TernaryOp {
+        condition: Box<AstNode>,
+        true_value: Box<AstNode>,
+        false_value: Box<AstNode>,
+    },    /// While loop
     While {
         condition: Box<AstNode>,
         body: Vec<AstNode>,
@@ -262,8 +279,7 @@ pub enum AstNodeKind {
     /// Function definition
     Function {
         name: String,
-        params: Vec<String>,
-        has_params: bool, // For `params let[]` support
+        params: Vec<Param>,
         body: Vec<AstNode>,
         access: AccessSpecifier,
         is_static: bool,

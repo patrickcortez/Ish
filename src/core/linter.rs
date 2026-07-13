@@ -121,9 +121,17 @@ impl Linter {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
-            AstNodeKind::Condition { left, right, .. } => {
+            AstNodeKind::BinaryOp { left, right, .. } => {
                 self.check_node(left)?;
                 self.check_node(right)?;
+            }
+            AstNodeKind::UnaryOp { operand, .. } => {
+                self.check_node(operand)?;
+            }
+            AstNodeKind::TernaryOp { condition, true_value, false_value } => {
+                self.check_node(condition)?;
+                self.check_node(true_value)?;
+                self.check_node(false_value)?;
             }
 
             AstNodeKind::Background(inner) => {
@@ -203,7 +211,7 @@ impl Linter {
                 self.defined_vars.pop();
                 self.in_loop_depth -= 1;
             }
-            AstNodeKind::Assignment { variable, index, value, is_declaration } => {
+            AstNodeKind::Assignment { variable, index: _, value, is_declaration } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }
@@ -227,12 +235,18 @@ impl Linter {
                 }
                 self.defined_functions.insert(name.clone(), params.len());
                 
+                for param in params {
+                    if let Some(def) = &param.default_value {
+                        self.check_node(def)?;
+                    }
+                }
+                
                 self.defined_vars.push(HashSet::new());
                 self.function_bases.push(self.defined_vars.len() - 1);
                 
                 if let Some(scope) = self.defined_vars.last_mut() {
                     for param in params {
-                        scope.insert(param.clone());
+                        scope.insert(param.name.clone());
                     }
                 }
                 

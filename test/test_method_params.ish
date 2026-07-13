@@ -1,0 +1,40 @@
+namespace App {
+    public class Tester {
+        public func check_defaults(let arg = "default_value", let arg2 = 10) {
+            out "arg=$arg"
+            out "arg2=$arg2"
+            return 0
+        }
+
+        public func check_variadic(let prefix, params let[] others) {
+            out "prefix=$prefix"
+            out "others=$others"
+            for item in $others {
+                out " - variadic item: $item"
+            }
+            return 0
+        }
+    }
+
+    public static class Program {
+        public static func Main(params let[] args) {
+            let $tester = new Tester()
+            
+            out "--- Default Arguments ---"
+            // Calling without args should use defaults
+            $tester.check_defaults()
+            // Calling with one arg should use default for second
+            $tester.check_defaults("provided_arg1")
+            // Calling with both
+            $tester.check_defaults("provided_arg1", "provided_arg2")
+
+            out "--- Variadic Arguments ---"
+            // Variadic with no extra elements
+            $tester.check_variadic("PRE")
+            // Variadic with some extra elements
+            $tester.check_variadic("PRE", "val1", "val2", "val3")
+
+            return 0
+        }
+    }
+}

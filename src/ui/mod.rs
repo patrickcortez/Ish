@@ -112,6 +112,9 @@ impl App {
         banner::print_banner();
         let mut stdout = io::stdout();
 
+        let mut executor = Executor::new(vec![]);
+        executor.current_class = Some("Program".to_string());
+
         loop {
             let os_icon = if std::env::consts::OS == "windows" { "\u{e70f} " } else if std::env::consts::OS == "macos" { "\u{f179} " } else { "\u{f17c} " };
             let user = env::var("USER").or_else(|_| env::var("USERNAME")).unwrap_or_else(|_| "user".to_string());
@@ -462,7 +465,8 @@ impl App {
                 continue;
             }
 
-            let mut tokenizer = Tokenizer::new(cmd);
+            let wrapped_cmd = format!("public static class Program {{ public static func Main(params let[] args) {{ {} }} }}", cmd);
+            let mut tokenizer = Tokenizer::new(&wrapped_cmd);
             match tokenizer.tokenize() {
                 Ok(tokens) => {
                     let mut parser = Parser::new(tokens);
@@ -472,12 +476,24 @@ impl App {
                             if let Err(e) = linter.lint(&ast) {
                                 eprintln!("Lint Error: {}", e);
                             } else {
-                                let mut jobs = std::mem::replace(&mut self.jobs, JobController::new());
-                                let mut executor = Executor::new(vec![]);
-                                if let Err(e) = executor.execute(&ast, &mut jobs) {
-                                    eprintln!("Execution Error: {}", e);
+                                // Extract the statements from Program::Main and execute them in the global scope
+                                let mut stmts = Vec::new();
+                                if let crate::core::ast::AstNodeKind::ClassDecl { methods, .. } = ast.kind {
+                                    for m_node in methods {
+                                        if let crate::core::ast::AstNodeKind::Function { name, body, .. } = &m_node.kind {
+                                            if name == "Main" {
+                                                stmts = body.clone();
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
-                                self.jobs = jobs;
+
+                                for stmt in stmts {
+                                    if let Err(e) = executor.execute_node_with_input(&stmt, "", None, &mut self.jobs) {
+                                        eprintln!("Execution Error: {}", e);
+                                    }
+                                }
                             }
                         }
                         Err(e) => eprintln!("Parse Error: {}", e),

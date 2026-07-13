@@ -328,10 +328,87 @@ impl Executor {
                 }
             }
 
-            AstNodeKind::Condition { left, operator, right } => {
+            AstNodeKind::BinaryOp { left, operator, right } => {
                 let left_val = self.evaluate_node(left, jobs)?;
                 let right_val = self.evaluate_node(right, jobs)?;
                 
+                // First handle math operations and string concatenation
+                match operator.as_str() {
+                    "+" => {
+                        return match (left_val, right_val) {
+                            (IshValue::Int(l), IshValue::Int(r)) => Ok(IshValue::Int(l + r)),
+                            (IshValue::Float(l), IshValue::Float(r)) => Ok(IshValue::Float(l + r)),
+                            (IshValue::Int(l), IshValue::Float(r)) => Ok(IshValue::Float(l as f32 + r)),
+                            (IshValue::Float(l), IshValue::Int(r)) => Ok(IshValue::Float(l + r as f32)),
+                            (l, r) => Ok(IshValue::String(format!("{}{}", l.to_string(), r.to_string()))), // String concat
+                        };
+                    }
+                    "-" => {
+                        return match (left_val, right_val) {
+                            (IshValue::Int(l), IshValue::Int(r)) => Ok(IshValue::Int(l - r)),
+                            (IshValue::Float(l), IshValue::Float(r)) => Ok(IshValue::Float(l - r)),
+                            (IshValue::Int(l), IshValue::Float(r)) => Ok(IshValue::Float(l as f32 - r)),
+                            (IshValue::Float(l), IshValue::Int(r)) => Ok(IshValue::Float(l - r as f32)),
+                            _ => Err(IshError::ExecutionError(format!("Cannot subtract these types"))),
+                        };
+                    }
+                    "*" => {
+                        return match (left_val, right_val) {
+                            (IshValue::Int(l), IshValue::Int(r)) => Ok(IshValue::Int(l * r)),
+                            (IshValue::Float(l), IshValue::Float(r)) => Ok(IshValue::Float(l * r)),
+                            (IshValue::Int(l), IshValue::Float(r)) => Ok(IshValue::Float(l as f32 * r)),
+                            (IshValue::Float(l), IshValue::Int(r)) => Ok(IshValue::Float(l * r as f32)),
+                            _ => Err(IshError::ExecutionError(format!("Cannot multiply these types"))),
+                        };
+                    }
+                    "/" => {
+                        return match (left_val, right_val) {
+                            (IshValue::Int(l), IshValue::Int(r)) => {
+                                if r == 0 { Err(IshError::ExecutionError("Division by zero".into())) } else { Ok(IshValue::Int(l / r)) }
+                            }
+                            (IshValue::Float(l), IshValue::Float(r)) => Ok(IshValue::Float(l / r)),
+                            (IshValue::Int(l), IshValue::Float(r)) => Ok(IshValue::Float(l as f32 / r)),
+                            (IshValue::Float(l), IshValue::Int(r)) => Ok(IshValue::Float(l / r as f32)),
+                            _ => Err(IshError::ExecutionError(format!("Cannot divide these types"))),
+                        };
+                    }
+                    "%" => {
+                        return match (left_val, right_val) {
+                            (IshValue::Int(l), IshValue::Int(r)) => {
+                                if r == 0 { Err(IshError::ExecutionError("Modulo by zero".into())) } else { Ok(IshValue::Int(l % r)) }
+                            }
+                            (IshValue::Float(l), IshValue::Float(r)) => Ok(IshValue::Float(l % r)),
+                            (IshValue::Int(l), IshValue::Float(r)) => Ok(IshValue::Float(l as f32 % r)),
+                            (IshValue::Float(l), IshValue::Int(r)) => Ok(IshValue::Float(l % r as f32)),
+                            _ => Err(IshError::ExecutionError(format!("Cannot modulo these types"))),
+                        };
+                    }
+                    "&&" => {
+                        let l_bool = match left_val {
+                            IshValue::Bool(b) => b,
+                            _ => true, // Truthy
+                        };
+                        let r_bool = match right_val {
+                            IshValue::Bool(b) => b,
+                            _ => true,
+                        };
+                        return Ok(IshValue::Bool(l_bool && r_bool));
+                    }
+                    "||" => {
+                        let l_bool = match left_val {
+                            IshValue::Bool(b) => b,
+                            _ => true,
+                        };
+                        let r_bool = match right_val {
+                            IshValue::Bool(b) => b,
+                            _ => true,
+                        };
+                        return Ok(IshValue::Bool(l_bool || r_bool));
+                    }
+                    _ => {} // Handled below (comparisons)
+                }
+
+                // Handle logical comparisons
                 let success = match (left_val, right_val) {
                     (IshValue::Int(l), IshValue::Int(r)) => match operator.as_str() {
                         "==" => l == r,
@@ -376,6 +453,38 @@ impl Executor {
                     }
                 };
                 Ok(IshValue::Bool(success))
+            }
+            AstNodeKind::UnaryOp { operator, operand } => {
+                let val = self.evaluate_node(operand, jobs)?;
+                match operator.as_str() {
+                    "!" => {
+                        match val {
+                            IshValue::Bool(b) => Ok(IshValue::Bool(!b)),
+                            _ => Ok(IshValue::Bool(false)), // Non-bool negated to false typically, or invert truthiness
+                        }
+                    }
+                    "-" => {
+                        match val {
+                            IshValue::Int(i) => Ok(IshValue::Int(-i)),
+                            IshValue::Float(f) => Ok(IshValue::Float(-f)),
+                            _ => Err(IshError::ExecutionError("Cannot negate non-numeric type".into())),
+                        }
+                    }
+                    _ => Err(IshError::ExecutionError(format!("Unknown unary operator: {}", operator))),
+                }
+            }
+            AstNodeKind::TernaryOp { condition, true_value, false_value } => {
+                let cond_val = self.evaluate_node(condition, jobs)?;
+                let is_true = match cond_val {
+                    IshValue::Bool(b) => b,
+                    IshValue::Null => false,
+                    _ => true,
+                };
+                if is_true {
+                    self.evaluate_node(true_value, jobs)
+                } else {
+                    self.evaluate_node(false_value, jobs)
+                }
             }
             AstNodeKind::Subshell(inner) => {
                 let out = self.capture_output(inner, jobs)?;
@@ -455,7 +564,7 @@ impl Executor {
                 self.execute_node_with_input(ast, "", None, jobs)?;
                 
                 // Now invoke Program::Main
-                let class_def = self.registry.classes.get("Program").cloned()
+                let class_def = self.registry.classes.get(&program_class_name).cloned()
                     .ok_or_else(|| IshError::ExecutionError(
                         "Internal error: Program class disappeared after registration.".to_string()
                     ))?;
@@ -484,7 +593,7 @@ impl Executor {
                     scope.insert("args".to_string(), IshValue::Array(arg_list));
                 }
 
-                let mut last_output = String::new();
+                let _last_output = String::new();
                 for stmt in &main_method.body {
                     self.execute_node_with_input(stmt, "", None, jobs)?;
                     if self.returning { break; }
@@ -511,7 +620,7 @@ impl Executor {
         }
     }
 
-    fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> 
+    pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError>
     {
         match &node.kind {
             AstNodeKind::Subshell(inner) => {
@@ -527,14 +636,37 @@ impl Executor {
                 }
 
                 if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
+                    let mut evaluated_params = Vec::new();
+                    let mut arg_idx = 0;
+                    for param in &params {
+                        if param.is_variadic {
+                            let mut variadic_arr = Vec::new();
+                            while arg_idx < resolved_args.len() {
+                                variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
+                                arg_idx += 1;
+                            }
+                            evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                        } else {
+                            if arg_idx < resolved_args.len() {
+                                evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
+                                arg_idx += 1;
+                            } else {
+                                if let Some(default_expr) = &param.default_value {
+                                    let val = self.evaluate_node(default_expr, jobs)?;
+                                    evaluated_params.push((param.name.clone(), val));
+                                } else {
+                                    evaluated_params.push((param.name.clone(), IshValue::Null));
+                                }
+                            }
+                        }
+                    }
+
                     self.variables.push(HashMap::new());
                     self.function_bases.push(self.variables.len() - 1);
                     
                     if let Some(scope) = self.variables.last_mut() {
-                        for (i, param) in params.iter().enumerate() {
-                            if i < resolved_args.len() {
-                                scope.insert(param.clone(), IshValue::String(resolved_args[i].clone()));
-                            }
+                        for (k, v) in evaluated_params {
+                            scope.insert(k, v);
                         }
                         for (i, arg) in resolved_args.iter().enumerate() {
                             scope.insert((i + 1).to_string(), IshValue::String(arg.clone()));
@@ -729,6 +861,7 @@ impl Executor {
 
                 let mut child = cmd.spawn().map_err(|e| {
                     if e.kind() == std::io::ErrorKind::NotFound {
+                        println!("DEBUG: Command failed: final_program={}, resolved_args={:?}", final_program, resolved_args);
                         IshError::ExecutionError(format!("program not found: {}", final_program))
                     } else {
                         IshError::ExecutionError(e.to_string())
@@ -792,13 +925,36 @@ impl Executor {
                         }
 
                         if let Some(AstNode { kind: AstNodeKind::Function { params, body, .. }, .. }) = self.functions.get(&resolved_program).cloned() {
+                            let mut evaluated_params = Vec::new();
+                            let mut arg_idx = 0;
+                            for param in &params {
+                                if param.is_variadic {
+                                    let mut variadic_arr = Vec::new();
+                                    while arg_idx < resolved_args.len() {
+                                        variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
+                                        arg_idx += 1;
+                                    }
+                                    evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                                } else {
+                                    if arg_idx < resolved_args.len() {
+                                        evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
+                                        arg_idx += 1;
+                                    } else {
+                                        if let Some(default_expr) = &param.default_value {
+                                            let val = self.evaluate_node(default_expr, jobs)?;
+                                            evaluated_params.push((param.name.clone(), val));
+                                        } else {
+                                            evaluated_params.push((param.name.clone(), IshValue::Null));
+                                        }
+                                    }
+                                }
+                            }
+
                             self.variables.push(HashMap::new());
                             self.function_bases.push(self.variables.len() - 1);
                             if let Some(scope) = self.variables.last_mut() {
-                                for (i, param) in params.iter().enumerate() {
-                                    if i < resolved_args.len() {
-                                        scope.insert(param.clone(), IshValue::String(resolved_args[i].clone()));
-                                    }
+                                for (k, v) in evaluated_params {
+                                    scope.insert(k, v);
                                 }
                                 for (i, arg) in resolved_args.iter().enumerate() {
                                     scope.insert((i + 1).to_string(), IshValue::String(arg.clone()));
@@ -969,6 +1125,7 @@ impl Executor {
 
                         let mut child = cmd.spawn().map_err(|e| {
                             if e.kind() == std::io::ErrorKind::NotFound {
+                                println!("DEBUG: Piped command failed: final_program={}", final_program);
                                 IshError::ExecutionError(format!("program not found: {}", final_program))
                             } else {
                                 IshError::ExecutionError(e.to_string())
@@ -1085,6 +1242,7 @@ impl Executor {
                         }
                         Err(e) => {
                             if e.kind() == std::io::ErrorKind::NotFound {
+                                println!("DEBUG: Background command failed: final_program={}", final_program);
                                 Err(IshError::ExecutionError(format!("program not found: {}", final_program)))
                             } else {
                                 Err(IshError::ExecutionError(e.to_string()))
@@ -1095,54 +1253,12 @@ impl Executor {
                     Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
                 }
             }
-            AstNodeKind::Condition { left, operator, right } => {
-                let left_val = self.evaluate_node(left, jobs)?;
-                let right_val = self.evaluate_node(right, jobs)?;
-                
-                let success = match (left_val, right_val) {
-                    (IshValue::Int(l), IshValue::Int(r)) => match operator.as_str() {
-                        "==" => l == r,
-                        "!=" => l != r,
-                        ">" => l > r,
-                        "<" => l < r,
-                        ">=" => l >= r,
-                        "<=" => l <= r,
-                        _ => false,
-                    },
-                    (IshValue::Float(l), IshValue::Float(r)) => match operator.as_str() {
-                        "==" => l == r,
-                        "!=" => l != r,
-                        ">" => l > r,
-                        "<" => l < r,
-                        ">=" => l >= r,
-                        "<=" => l <= r,
-                        _ => false,
-                    },
-                    (IshValue::Int(l), IshValue::Float(r)) => match operator.as_str() {
-                        "==" => (l as f32) == r,
-                        "!=" => (l as f32) != r,
-                        ">" => (l as f32) > r,
-                        "<" => (l as f32) < r,
-                        ">=" => (l as f32) >= r,
-                        "<=" => (l as f32) <= r,
-                        _ => false,
-                    },
-                    (IshValue::Float(l), IshValue::Int(r)) => match operator.as_str() {
-                        "==" => l == (r as f32),
-                        "!=" => l != (r as f32),
-                        ">" => l > (r as f32),
-                        "<" => l < (r as f32),
-                        ">=" => l >= (r as f32),
-                        "<=" => l <= (r as f32),
-                        _ => false,
-                    },
-                    (l, r) => match operator.as_str() {
-                        "==" => l == r,
-                        "!=" => l != r,
-                        _ => false,
-                    }
+            AstNodeKind::BinaryOp { .. } | AstNodeKind::UnaryOp { .. } | AstNodeKind::TernaryOp { .. } => {
+                let val = self.evaluate_node(node, jobs)?;
+                let success = match val {
+                    IshValue::Bool(b) => b,
+                    _ => true,
                 };
-                
                 self.last_exit_code = if success { 0 } else { 1 };
                 Ok(success)
             }
@@ -1572,15 +1688,38 @@ impl Executor {
                             eval_args.push(self.evaluate_node(arg_node, jobs)?);
                         }
 
+                        let mut evaluated_params = Vec::new();
+                        let mut arg_idx = 0;
+                        for param in &method.params {
+                            if param.is_variadic {
+                                let mut variadic_arr = Vec::new();
+                                while arg_idx < eval_args.len() {
+                                    variadic_arr.push(eval_args[arg_idx].clone());
+                                    arg_idx += 1;
+                                }
+                                evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                            } else {
+                                if arg_idx < eval_args.len() {
+                                    evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
+                                    arg_idx += 1;
+                                } else {
+                                    if let Some(default_expr) = &param.default_value {
+                                        let val = self.evaluate_node(default_expr, jobs)?;
+                                        evaluated_params.push((param.name.clone(), val));
+                                    } else {
+                                        evaluated_params.push((param.name.clone(), IshValue::Null));
+                                    }
+                                }
+                            }
+                        }
+
                         // Push method scope
                         self.variables.push(HashMap::new());
                         self.function_bases.push(self.variables.len() - 1);
                         if let Some(scope) = self.variables.last_mut() {
                             scope.insert("this".to_string(), obj_val.clone());
-                            for (i, param) in method.params.iter().enumerate() {
-                                if i < eval_args.len() {
-                                    scope.insert(param.clone(), eval_args[i].clone());
-                                }
+                            for (k, v) in evaluated_params {
+                                scope.insert(k, v);
                             }
                         }
 
@@ -1652,14 +1791,37 @@ impl Executor {
                                 eval_args.push(self.evaluate_node(arg_node, jobs)?);
                             }
 
+                            let mut evaluated_params = Vec::new();
+                            let mut arg_idx = 0;
+                            for param in &method.params {
+                                if param.is_variadic {
+                                    let mut variadic_arr = Vec::new();
+                                    while arg_idx < eval_args.len() {
+                                        variadic_arr.push(eval_args[arg_idx].clone());
+                                        arg_idx += 1;
+                                    }
+                                    evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                                } else {
+                                    if arg_idx < eval_args.len() {
+                                        evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
+                                        arg_idx += 1;
+                                    } else {
+                                        if let Some(default_expr) = &param.default_value {
+                                            let val = self.evaluate_node(default_expr, jobs)?;
+                                            evaluated_params.push((param.name.clone(), val));
+                                        } else {
+                                            evaluated_params.push((param.name.clone(), IshValue::Null));
+                                        }
+                                    }
+                                }
+                            }
+
                             // Push method scope
                             self.variables.push(HashMap::new());
                             self.function_bases.push(self.variables.len() - 1);
                             if let Some(scope) = self.variables.last_mut() {
-                                for (i, param) in method.params.iter().enumerate() {
-                                    if i < eval_args.len() {
-                                        scope.insert(param.clone(), eval_args[i].clone());
-                                    }
+                                for (k, v) in evaluated_params {
+                                    scope.insert(k, v);
                                 }
                             }
 

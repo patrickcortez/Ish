@@ -128,12 +128,12 @@ my_list.clear()
 ```
 
 **Maps**:
-Initialize maps natively using the `Map` constructor keyword combined with a JSON-like object notation:
+Initialize maps natively using the `Map` constructor keyword combined with JSON-like object notation. You can pass multiple key-value pair blocks separated by commas:
 ```bash
-let my_map = Map({
-    "name": "Ish",
-    "version": "1.0"
-})
+let my_map = Map(
+    {"name": "Ish"},
+    {"version": "1.0"}
+)
 out "Shell Name: $my_map[\"name\"]"
 ```
 
@@ -143,12 +143,20 @@ out "Shell Name: $my_map[\"name\"]"
 ## Math & Subshells
 
 ### Automatic Math Expressions
-Ish evaluates math expressions automatically using bodmas-compliant logic inside the `$(( ... ))` expansion syntax.
+Ish natively evaluates math expressions directly within the syntax using grouping `( ... )`. Standard BODMAS operator precedence is respected (`*`, `/`, `+`, `-`).
+You no longer need string expansions to perform math!
 
 ```bash
-let x = "$(( 5 + 10 * 2 ))"
-let y = "$(( $x / 2.5 ))"
-out $y
+let result = ($a * $b + 2)
+out $result
+```
+
+### Ternary Operators
+Ish supports concise `if-else` assignments natively using the `? :` ternary operator syntax. It must be grouped as an expression.
+
+```bash
+let msg = ($result > 50) ? "big" : "small"
+out $msg
 ```
 
 ### Subshells
@@ -214,14 +222,26 @@ To enforce maintainable programming rules, the `return` statement has strict beh
 2. You **cannot** return commands directly. Expressions like `return out hello` will throw a linter error.
 3. Subshells are permitted during a return statement **only if they yield a valid value**.
 
+### Parameter Declarations
+Parameters must be explicitly declared using `let` or `let[]`. You can also assign default values to arguments, which will be used if the caller doesn't provide them. 
+
+For variadic arguments (accepting any number of trailing arguments), prefix the array parameter with the `params` keyword. Variadic parameters cannot have default values.
+
 ```bash
-func calculate_sum(a, b) {
-    let sum = "$(( $a + $b ))"
+func calculate_sum(let a, let b = 5) {
+    let sum = ($a + $b)
     return $sum
 }
 
-let result = calculate_sum(10, 20)
+func log_messages(let prefix, params let[] messages) {
+    foreach (msg in $messages) {
+        out "$prefix: $msg"
+    }
+}
+
+let result = calculate_sum(10)
 out "The sum is: $result"
+log_messages("INFO", "Starting up...", "Loading config...")
 ```
 
 ## Object-Oriented Programming (OOP)
