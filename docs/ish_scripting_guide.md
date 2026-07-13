@@ -4,6 +4,7 @@ The Ish shell is built around a custom AST parsing engine and comes with its own
 
 ## Table of Contents
 - [Core Syntax](#core-syntax)
+- [Memory Management & The Gobbler](#memory-management--the-gobbler)
 - [Variables & Scoping](#variables--scoping)
 - [Data Structures](#data-structures)
 - [Math & Subshells](#math--subshells)
@@ -71,6 +72,40 @@ Ish uses the `while` operator to run the left node in the background simultaneou
 ## Data Structures
 
 Ish internally supports strong typing with `Int`, `Float`, `Bool`, and `Null` values, alongside native strings.
+
+## Memory Management & The Gobbler
+
+Ish uses a fully automatic **Memory Management System (MMS)** called **The Gobbler**. It behaves exactly like C#'s Garbage Collector, providing robust, automatic memory management for your scripts.
+
+### Value vs Reference Types
+
+- **Value Types**: Primitive types like `String`, `Int`, `Float`, and `Bool` are passed by **value**. Their data is fully copied when assigned to a new variable.
+- **Reference Types**: Complex types like `List`, `Array`, `Map`, and `Object` are passed by **reference**. Memory is allocated on the heap, and variables simply hold a reference (pointer) to that memory.
+
+If two variables hold a reference to the same list, modifying the list through one variable will affect the other, since they share the same memory:
+```bash
+let $a = [1, 2, 3]
+let $b = $a
+$b.add(4)
+
+out $a[3] # Outputs 4 because $a and $b point to the same list in memory!
+```
+
+### Automatic Garbage Collection
+
+You never have to manually free memory in Ish. The Gobbler actively traces your variables. 
+
+When a variable, object, or method goes out of scope (e.g., when a method returns, a loop ends, or a block finishes), the Gobbler instantly unallocates its memory using a rigorous **Mark-and-Sweep** algorithm. 
+If an object goes out of scope and it has a defined destructor, the Gobbler guarantees it will execute before the memory is permanently freed.
+
+```bash
+if ( true ) {
+    let $temp_list = [1, 2, 3]
+    # Do something with $temp_list
+}
+# The block ends and $temp_list goes out of scope here. 
+# The Gobbler immediately triggers and frees the memory for you!
+```
 
 ## Variables & Scoping
 

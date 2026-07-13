@@ -1,4 +1,4 @@
-use crate::core::ast::{AstNode, AstNodeKind, IshValue};
+use crate::core::ast::{AstNode, AstNodeKind, IshValue, AccessSpecifier};
 use crate::error::IshError;
 use std::process::{Command, Stdio};
 use std::fs::File;
@@ -7,11 +7,13 @@ use std::collections::HashMap;
 use crate::core::stdlib::{StdlibProvider, IshStr, IshFS, IshTime, IshNet, IshOS};
 use crate::core::registry::Registry;
 use crate::managers::job_controller::JobController;
+use crate::core::gobbler::{Gobbler, HeapObject};
 
 pub struct Executor {
     pub script_args: Vec<String>,
     pub last_exit_code: i32,
     pub variables: Vec<HashMap<String, IshValue>>,
+    pub static_variables: HashMap<String, IshValue>,
     pub function_bases: Vec<usize>,
     pub return_value: Option<IshValue>,
     pub functions: HashMap<String, AstNode>,
@@ -22,6 +24,7 @@ pub struct Executor {
     pub registry: Registry,
     /// Tracks which class context we are currently executing within (for access checks).
     pub current_class: Option<String>,
+    pub gobbler: Gobbler,
 }
 
 impl Executor {
@@ -30,6 +33,7 @@ impl Executor {
             script_args, 
             last_exit_code: 0,
             variables: vec![HashMap::new()],
+            static_variables: HashMap::new(),
             function_bases: vec![0],
             return_value: None,
             functions: HashMap::new(),
@@ -39,36 +43,47 @@ impl Executor {
             stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS), Box::new(IshTime), Box::new(IshNet), Box::new(IshOS)],
             registry: Registry::new(),
             current_class: None,
+            gobbler: Gobbler::new(),
         }
     }
 
     fn pop_scope(&mut self, jobs: &mut JobController) -> Result<(), IshError> {
-        if let Some(scope) = self.variables.pop() {
-            for (_, val) in scope {
-                if let IshValue::Object { class_name, properties } = val {
-                    let class_def = self.registry.resolve_class(&class_name).cloned();
-                    if let Some(cdef) = class_def {
-                        if let Some(destructor_body) = cdef.destructor {
-                            self.variables.push(HashMap::new());
-                            self.function_bases.push(self.variables.len() - 1);
-                            if let Some(dest_scope) = self.variables.last_mut() {
-                                dest_scope.insert("this".to_string(), IshValue::Object {
-                                    class_name: class_name.clone(),
-                                    properties,
-                                });
-                            }
-                            let prev_class = self.current_class.clone();
-                            self.current_class = Some(cdef.qualified_name.clone());
-                            
-                            for stmt in destructor_body {
-                                let _ = self.execute_node_with_input(&stmt, "", None, jobs);
-                            }
-                            
-                            self.function_bases.pop();
-                            let _ = self.pop_scope(jobs);
-                            self.current_class = prev_class;
+        self.variables.pop();
+        let finalized = self.gobbler.collect(&self.variables, &self.static_variables);
+        for (id, class_name, properties) in finalized {
+            let class_def = self.registry.resolve_class(&class_name).cloned();
+            if let Some(cdef) = class_def {
+                if let Some(destructor_body) = cdef.destructor {
+                    self.variables.push(HashMap::new());
+                    self.function_bases.push(self.variables.len() - 1);
+                    if let Some(dest_scope) = self.variables.last_mut() {
+                        dest_scope.insert("this".to_string(), IshValue::Reference(id));
+                        // Wait, we just freed 'id'. But the destructor needs 'this'. 
+                        // So we should TEMPORARILY insert the object back into the heap for the destructor?
+                        // Or we pass properties as a temporary heap object?
+                        // Let's create a temporary object on the heap for the destructor to use.
+                        let temp_id = self.gobbler.allocate(HeapObject::Object {
+                            class_name: class_name.clone(),
+                            properties,
+                        });
+                        dest_scope.insert("this".to_string(), IshValue::Reference(temp_id));
+                        // the temp_id will be swept on the next pop_scope. But we must be careful not to double call destructor.
+                        // we can manually free it.
+                    }
+                    let prev_class = self.current_class.clone();
+                    self.current_class = Some(cdef.qualified_name.clone());
+                    
+                    for stmt in destructor_body {
+                        let _ = self.execute_node_with_input(&stmt, "", None, jobs);
+                    }
+                    
+                    self.function_bases.pop();
+                    if let Some(dest_scope) = self.variables.pop() {
+                        if let Some(IshValue::Reference(temp_id)) = dest_scope.get("this") {
+                            self.gobbler.free(*temp_id);
                         }
                     }
+                    self.current_class = prev_class;
                 }
             }
         }
@@ -206,15 +221,22 @@ impl Executor {
                                 } else {
                                     return Err(IshError::ExecutionError(format!("Map/Array index must be in quotes, a number, or a variable. Found: [{}]", idx_str)));
                                 };
-                                if let IshValue::Array(arr) = &final_val {
-                                    if let Ok(idx) = resolved_idx.parse::<usize>() {
-                                        if let Some(v) = arr.get(idx) {
-                                            final_val = v.clone();
+                                if let IshValue::Reference(id) = &final_val {
+                                    if let Some(obj) = self.gobbler.get(*id) {
+                                        match obj {
+                                            crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                                if let Ok(idx) = resolved_idx.parse::<usize>() {
+                                                    if let Some(v) = arr.get(idx) {
+                                                        final_val = v.clone();
+                                                    }
+                                                }
+                                            }
+                                            crate::core::gobbler::HeapObject::Map(m) | crate::core::gobbler::HeapObject::Object { properties: m, .. } => {
+                                                if let Some(v) = m.get(&resolved_idx) {
+                                                    final_val = v.clone();
+                                                }
+                                            }
                                         }
-                                    }
-                                } else if let IshValue::Map(m) = &final_val {
-                                    if let Some(v) = m.get(&resolved_idx) {
-                                        final_val = v.clone();
                                     }
                                 }
                             }
@@ -589,8 +611,9 @@ impl Executor {
                 for arg in &self.script_args {
                     arg_list.push(IshValue::String(arg.clone()));
                 }
+                let args_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(arg_list));
                 if let Some(scope) = self.variables.last_mut() {
-                    scope.insert("args".to_string(), IshValue::Array(arg_list));
+                    scope.insert("args".to_string(), IshValue::Reference(args_ref));
                 }
 
                 let _last_output = String::new();
@@ -645,7 +668,8 @@ impl Executor {
                                 variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
                                 arg_idx += 1;
                             }
-                            evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                            let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                            evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
                         } else {
                             if arg_idx < resolved_args.len() {
                                 evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
@@ -749,7 +773,7 @@ impl Executor {
                             Err("kill error: invalid job id".to_string())
                         }
                     }
-                    _ => crate::core::utils::execute_internal(&final_program, &final_args)
+                    _ => crate::core::utils::execute_internal(&final_program, &final_args, &mut self.gobbler)
                 };
 
                 if let Ok(None) = internal_result {
@@ -777,13 +801,8 @@ impl Executor {
                         } else {
                             let output = output_val.to_string();
                             if !output.trim().is_empty() {
-                                if let crate::core::ast::IshValue::Array(_) | crate::core::ast::IshValue::Map(_) = output_val {
-                                    // Structured output will be printed with its custom display
-                                    print!("{}", output);
-                                } else {
-                                    let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
-                                    print!("{}", out_str);
-                                }
+                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
+                                print!("{}", out_str);
                                 let _ = std::io::stdout().flush();
                             }
                         }
@@ -934,7 +953,8 @@ impl Executor {
                                         variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
                                         arg_idx += 1;
                                     }
-                                    evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                                    let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                                    evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
                                 } else {
                                     if arg_idx < resolved_args.len() {
                                         evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
@@ -986,10 +1006,7 @@ impl Executor {
                                         last_cmd_success = true;
                                         if i < nodes.len() - 1 {
                                             // Handle Stdlib provider output strings by parsing them speculatively
-                                            let parsed = match serde_json::from_str::<serde_json::Value>(&output) {
-                                                Ok(v) => crate::core::ast::IshValue::from(v),
-                                                Err(_) => crate::core::ast::IshValue::String(output.clone()),
-                                            };
+                                            let parsed = crate::core::ast::IshValue::String(output.clone());
                                             internal_output = Some(parsed);
                                             let _ = previous_stdout.take();
                                         } else {
@@ -1021,7 +1038,7 @@ impl Executor {
                             continue;
                         }
 
-                        match crate::core::utils::execute_internal(&final_program, &final_args) {
+                        match crate::core::utils::execute_internal(&final_program, &final_args, &mut self.gobbler) {
                             Ok(Some(output_val)) => {
                                 self.last_exit_code = 0;
                                 last_cmd_success = true;
@@ -1138,11 +1155,7 @@ impl Executor {
                             }
                         } else if let Some(out_val) = internal_output.take() {
                             if let Some(mut stdin) = child.stdin.take() {
-                                let mut output_str = out_val.to_string();
-                                if let crate::core::ast::IshValue::Map(_) | crate::core::ast::IshValue::Array(_) = &out_val {
-                                    // if it's a native structure, serialize to json string
-                                    output_str = serde_json::to_string(&Into::<serde_json::Value>::into(out_val)).unwrap_or(output_str);
-                                }
+                                let output_str = out_val.to_string();
                                 let _ = stdin.write_all(output_str.as_bytes());
                             }
                         } else if i == 0 && !input.is_empty() && previous_stdout.is_none() {
@@ -1270,14 +1283,16 @@ impl Executor {
                         for item in items {
                             arr.push(self.evaluate_node(item, jobs)?);
                         }
-                        IshValue::Array(arr)
+                        let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(arr));
+                        IshValue::Reference(arr_ref)
                     }
                     AstNodeKind::Map(items) => {
                         let mut m = HashMap::new();
                         for (k, v) in items {
                             m.insert(k.clone(), self.evaluate_node(v, jobs)?);
                         }
-                        IshValue::Map(m)
+                        let map_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Map(m));
+                        IshValue::Reference(map_ref)
                     }
                     _ => self.evaluate_node(value, jobs)?,
                 };
@@ -1285,27 +1300,33 @@ impl Executor {
                 if let Some(idx_node) = index {
                     let idx_val = self.evaluate_node(idx_node, jobs)?;
                     let mut found = false;
-                    for scope in self.variables.iter_mut().rev() {
-                        if let Some(existing) = scope.get_mut(variable) {
-                            match existing {
-                                IshValue::Array(_) => return Err(IshError::ExecutionError("Array is immutable. Use List for mutable ordered collections.".to_string())),
-                                IshValue::List(l) => {
-                                    if let IshValue::Int(i) = idx_val {
-                                        if i >= 0 && (i as usize) < l.len() {
-                                            l[i as usize] = val.clone();
-                                        } else {
-                                            return Err(IshError::ExecutionError("Index out of bounds".to_string()));
+                    for scope in self.variables.iter().rev() {
+                        if let Some(existing) = scope.get(variable) {
+                            if let IshValue::Reference(id) = existing {
+                                found = true;
+                                if let Some(heap_obj) = self.gobbler.get_mut(*id) {
+                                    match heap_obj {
+                                        crate::core::gobbler::HeapObject::Array(_) => return Err(IshError::ExecutionError("Array is immutable. Use List for mutable ordered collections.".to_string())),
+                                        crate::core::gobbler::HeapObject::List(l) => {
+                                            if let IshValue::Int(i) = idx_val {
+                                                if i >= 0 && (i as usize) < l.len() {
+                                                    l[i as usize] = val.clone();
+                                                } else {
+                                                    return Err(IshError::ExecutionError("Index out of bounds".to_string()));
+                                                }
+                                            } else {
+                                                return Err(IshError::ExecutionError("List index must be an integer".to_string()));
+                                            }
                                         }
-                                    } else {
-                                        return Err(IshError::ExecutionError("List index must be an integer".to_string()));
+                                        crate::core::gobbler::HeapObject::Map(m) => {
+                                            m.insert(idx_val.to_string(), val.clone());
+                                        }
+                                        _ => return Err(IshError::ExecutionError("Variable is not indexable".to_string())),
                                     }
                                 }
-                                IshValue::Map(m) => {
-                                    m.insert(idx_val.to_string(), val.clone());
-                                }
-                                _ => return Err(IshError::ExecutionError("Variable is not indexable".to_string())),
+                            } else {
+                                return Err(IshError::ExecutionError("Variable is not indexable".to_string()));
                             }
-                            found = true;
                             break;
                         }
                     }
@@ -1362,7 +1383,13 @@ impl Executor {
             AstNodeKind::For { variable, iterable, body } => {
                 let iterable_val = self.evaluate_node(iterable, jobs)?;
                 let items: Vec<String> = match iterable_val {
-                    IshValue::Array(arr) => arr.iter().map(|v| v.to_string()).collect(),
+                    IshValue::Reference(id) => {
+                        if let Some(crate::core::gobbler::HeapObject::Array(arr)) | Some(crate::core::gobbler::HeapObject::List(arr)) = self.gobbler.get(id) {
+                            arr.iter().map(|v| v.to_string()).collect()
+                        } else {
+                            vec!["<Reference>".to_string()]
+                        }
+                    }
                     IshValue::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
                     _ => vec![iterable_val.to_string()],
                 };
@@ -1493,6 +1520,8 @@ impl Executor {
                     stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
                     registry: self.registry.clone(),
                     current_class: self.current_class.clone(),
+                    gobbler: self.gobbler.clone(),
+                    static_variables: self.static_variables.clone(),
                 };
                 let mut exec_right = Executor {
                     script_args: self.script_args.clone(),
@@ -1507,6 +1536,8 @@ impl Executor {
                     stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
                     registry: self.registry.clone(),
                     current_class: self.current_class.clone(),
+                    gobbler: self.gobbler.clone(),
+                    static_variables: self.static_variables.clone(),
                 };
                 let left_node = left.clone();
                 let right_node = right.clone();
@@ -1554,7 +1585,8 @@ impl Executor {
             // ---- OOP: Object Instantiation ----
             AstNodeKind::ObjectInstantiation { class_name, args } => {
                 if class_name == "List" {
-                    self.return_value = Some(IshValue::List(Vec::new()));
+                    let list_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::List(Vec::new()));
+                    self.return_value = Some(IshValue::Reference(list_ref));
                     return Ok(true);
                 }
                 
@@ -1595,10 +1627,11 @@ impl Executor {
                     self.function_bases.push(self.variables.len() - 1);
                     if let Some(scope) = self.variables.last_mut() {
                         // Bind `this` as properties map
-                        scope.insert("this".to_string(), IshValue::Object {
+                        let obj_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Object {
                             class_name: class_name.clone(),
                             properties: properties.clone(),
                         });
+                        scope.insert("this".to_string(), IshValue::Reference(obj_ref));
                         // Assume no params for constructor yet, or parse them later
                     }
                     let prev_class = self.current_class.clone();
@@ -1609,8 +1642,10 @@ impl Executor {
                     }
                     // Extract potentially-modified `this`
                     if let Some(scope) = self.variables.last() {
-                        if let Some(IshValue::Object { properties: p, .. }) = scope.get("this") {
-                            properties = p.clone();
+                        if let Some(IshValue::Reference(id)) = scope.get("this") {
+                            if let Some(crate::core::gobbler::HeapObject::Object { properties: p, .. }) = self.gobbler.get(*id) {
+                                properties = p.clone();
+                            }
                         }
                     }
                     self.returning = false;
@@ -1619,57 +1654,59 @@ impl Executor {
                     self.current_class = prev_class;
                 }
 
-                self.return_value = Some(IshValue::Object {
+                let obj_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Object {
                     class_name: class_name.clone(),
                     properties,
                 });
+                self.return_value = Some(IshValue::Reference(obj_ref));
                 Ok(true)
             }
 
             // ---- OOP: Method Call ----
             AstNodeKind::MethodCall { object, method_name, args } => {
                 let obj_val = self.evaluate_node(object, jobs)?;
+                
+                // Evaluate arguments before borrowing Gobbler
+                let mut eval_args = Vec::new();
+                for arg_node in args {
+                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                }
 
-                match obj_val {
-                    IshValue::List(mut l) => {
-                        match method_name.as_str() {
-                            "add" => {
-                                if let Some(arg) = args.get(0) {
-                                    l.push(self.evaluate_node(arg, jobs)?);
-                                }
-                            }
-                            "remove" => {
-                                if let Some(arg) = args.get(0) {
-                                    let idx = self.evaluate_node(arg, jobs)?;
-                                    if let IshValue::Int(i) = idx {
-                                        if i >= 0 && (i as usize) < l.len() {
-                                            l.remove(i as usize);
+                if let IshValue::Reference(id) = obj_val {
+                    let mut obj_class_name = None;
+                    
+                    if let Some(heap_obj) = self.gobbler.get_mut(id) {
+                        match heap_obj {
+                            crate::core::gobbler::HeapObject::List(l) => {
+                                match method_name.as_str() {
+                                    "add" => {
+                                        if let Some(arg) = eval_args.get(0) {
+                                            l.push(arg.clone());
                                         }
                                     }
+                                    "remove" => {
+                                        if let Some(idx) = eval_args.get(0) {
+                                            if let IshValue::Int(i) = idx {
+                                                if *i >= 0 && (*i as usize) < l.len() {
+                                                    l.remove(*i as usize);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "clear" => l.clear(),
+                                    _ => return Err(IshError::ExecutionError(format!("List has no method '{}'", method_name))),
                                 }
+                                return Ok(true);
                             }
-                            "clear" => l.clear(),
-                            _ => return Err(IshError::ExecutionError(format!("List has no method '{}'", method_name))),
-                        }
-                        
-                        // Copy back if object is a variable
-                        if let AstNodeKind::StringLiteral(var_name) = &object.kind {
-                            let actual_var_name = if var_name.starts_with('$') {
-                                var_name[1..].to_string()
-                            } else {
-                                var_name.clone()
-                            };
-                            for scope in self.variables.iter_mut().rev() {
-                                if scope.contains_key(&actual_var_name) {
-                                    scope.insert(actual_var_name, IshValue::List(l));
-                                    break;
-                                }
+                            crate::core::gobbler::HeapObject::Object { class_name, .. } => {
+                                obj_class_name = Some(class_name.clone());
                             }
+                            _ => return Err(IshError::ExecutionError(format!("Method call on unsupported heap object"))),
                         }
-                        return Ok(true);
                     }
-                    IshValue::Object { ref class_name, .. } => {
-                        let class_def = self.registry.resolve_class(class_name).cloned()
+
+                    if let Some(class_name) = obj_class_name {
+                        let class_def = self.registry.resolve_class(&class_name).cloned()
                             .ok_or_else(|| IshError::ExecutionError(format!(
                                 "Class '{}' is not defined (method call on object).", class_name
                             )))?;
@@ -1682,11 +1719,7 @@ impl Executor {
                         // Check access specifier
                         Registry::check_access(&method.access, self.current_class.as_deref(), &class_def.qualified_name)?;
 
-                        // Evaluate arguments
-                        let mut eval_args = Vec::new();
-                        for arg_node in args {
-                            eval_args.push(self.evaluate_node(arg_node, jobs)?);
-                        }
+
 
                         let mut evaluated_params = Vec::new();
                         let mut arg_idx = 0;
@@ -1697,7 +1730,8 @@ impl Executor {
                                     variadic_arr.push(eval_args[arg_idx].clone());
                                     arg_idx += 1;
                                 }
-                                evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                                let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                                evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
                             } else {
                                 if arg_idx < eval_args.len() {
                                     evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
@@ -1717,7 +1751,7 @@ impl Executor {
                         self.variables.push(HashMap::new());
                         self.function_bases.push(self.variables.len() - 1);
                         if let Some(scope) = self.variables.last_mut() {
-                            scope.insert("this".to_string(), obj_val.clone());
+                            scope.insert("this".to_string(), IshValue::Reference(id));
                             for (k, v) in evaluated_params {
                                 scope.insert(k, v);
                             }
@@ -1734,30 +1768,9 @@ impl Executor {
 
                         let ret_val = self.return_value.take();
                         
-                        let mut new_this = obj_val.clone();
-                        if let Some(scope) = self.variables.last() {
-                            if let Some(t) = scope.get("this") {
-                                new_this = t.clone();
-                            }
-                        }
                         self.returning = false;
                         self.function_bases.pop();
                         let _ = self.pop_scope(jobs);
-                        
-                        // Copy back if object is a variable
-                        if let AstNodeKind::StringLiteral(var_name) = &object.kind {
-                            let actual_var_name = if var_name.starts_with('$') {
-                                var_name[1..].to_string()
-                            } else {
-                                var_name.clone()
-                            };
-                            for scope in self.variables.iter_mut().rev() {
-                                if scope.contains_key(&actual_var_name) {
-                                    scope.insert(actual_var_name, new_this.clone());
-                                    break;
-                                }
-                            }
-                        }
                         self.current_class = prev_class;
 
                         if let Some(val) = ret_val {
@@ -1765,8 +1778,11 @@ impl Executor {
                         }
 
                         self.last_exit_code = if success { 0 } else { 1 };
-                        Ok(success)
+                        return Ok(success);
                     }
+                }
+                
+                match obj_val {
                     IshValue::String(s) => {
                         // Check if s is a class name (Static Method Call)
                         if let Some(class_def) = self.registry.resolve_class(&s) {
@@ -1800,7 +1816,8 @@ impl Executor {
                                         variadic_arr.push(eval_args[arg_idx].clone());
                                         arg_idx += 1;
                                     }
-                                    evaluated_params.push((param.name.clone(), IshValue::Array(variadic_arr)));
+                                    let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                                    evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
                                 } else {
                                     if arg_idx < eval_args.len() {
                                         evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
@@ -1886,49 +1903,54 @@ impl Executor {
                     }
                 }
 
-                match &obj_val {
-                    IshValue::Object { class_name, properties } => {
-                        // Check field access
-                        if let Some(class_def) = self.registry.resolve_class(class_name) {
-                            if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
-                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                if let IshValue::Reference(id) = &obj_val {
+                    if let Some(heap_obj) = self.gobbler.get(*id) {
+                        match heap_obj {
+                            crate::core::gobbler::HeapObject::Object { class_name, properties } => {
+                                // Check field access
+                                if let Some(class_def) = self.registry.resolve_class(class_name) {
+                                    if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
+                                        Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                                    }
+                                }
+
+                                let val = properties.get(property_name.as_str())
+                                    .cloned()
+                                    .unwrap_or(IshValue::Null);
+
+                                let output = val.to_string();
+                                if let Some(path) = out_file {
+                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                    let _ = file.write_all(output.as_bytes());
+                                } else if !output.is_empty() {
+                                    print!("{}", output);
+                                    let _ = std::io::stdout().flush();
+                                }
+                                self.return_value = Some(val);
+                                return Ok(true);
                             }
+                            crate::core::gobbler::HeapObject::Map(m) => {
+                                let val = m.get(property_name.as_str())
+                                    .cloned()
+                                    .unwrap_or(IshValue::Null);
+                                let output = val.to_string();
+                                if let Some(path) = out_file {
+                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                                    let _ = file.write_all(output.as_bytes());
+                                } else if !output.is_empty() {
+                                    print!("{}", output);
+                                    let _ = std::io::stdout().flush();
+                                }
+                                self.return_value = Some(val);
+                                return Ok(true);
+                            }
+                            _ => {}
                         }
-
-                        let val = properties.get(property_name.as_str())
-                            .cloned()
-                            .unwrap_or(IshValue::Null);
-
-                        let output = val.to_string();
-                        if let Some(path) = out_file {
-                            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            let _ = file.write_all(output.as_bytes());
-                        } else if !output.is_empty() {
-                            print!("{}", output);
-                            let _ = std::io::stdout().flush();
-                        }
-                        self.return_value = Some(val);
-                        Ok(true)
                     }
-                    IshValue::Map(m) => {
-                        let val = m.get(property_name.as_str())
-                            .cloned()
-                            .unwrap_or(IshValue::Null);
-                        let output = val.to_string();
-                        if let Some(path) = out_file {
-                            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            let _ = file.write_all(output.as_bytes());
-                        } else if !output.is_empty() {
-                            print!("{}", output);
-                            let _ = std::io::stdout().flush();
-                        }
-                        self.return_value = Some(val);
-                        Ok(true)
-                    }
-                    _ => Err(IshError::ExecutionError(format!(
-                        "Cannot access property '{}' on non-object value '{}'.", property_name, obj_val.to_string()
-                    ))),
                 }
+                Err(IshError::ExecutionError(format!(
+                    "Cannot access property '{}' on non-object value '{}'.", property_name, obj_val.to_string()
+                )))
             }
             AstNodeKind::EnumDecl { .. } => Ok(true),
             AstNodeKind::WithImport { .. } => Ok(true),

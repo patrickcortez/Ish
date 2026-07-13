@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// Returns Ok(Some(IshValue)) if it was an internal command and it succeeded.
 /// Returns Ok(None) if it is NOT an internal command.
 /// Returns Err(error_message) if it was an internal command but it failed.
-pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<IshValue>, String> {
+pub fn execute_internal(program: &str, args: &[String], gobbler: &mut crate::core::gobbler::Gobbler) -> Result<Option<IshValue>, String> {
     match program {
         "change" => {
             let path = if args.is_empty() {
@@ -88,10 +88,12 @@ pub fn execute_internal(program: &str, args: &[String]) -> Result<Option<IshValu
                                 map.insert("is_dir".to_string(), IshValue::Bool(metadata.is_dir()));
                                 map.insert("is_file".to_string(), IshValue::Bool(metadata.is_file()));
                             }
-                            entries_arr.push(IshValue::Map(map));
+                            let map_ref = gobbler.allocate(crate::core::gobbler::HeapObject::Map(map));
+                            entries_arr.push(IshValue::Reference(map_ref));
                         }
                     }
-                    Ok(Some(IshValue::Array(entries_arr)))
+                    let arr_ref = gobbler.allocate(crate::core::gobbler::HeapObject::Array(entries_arr));
+                    Ok(Some(IshValue::Reference(arr_ref)))
                 }
                 Err(e) => Err(format!("show error: {}", e)),
             }
