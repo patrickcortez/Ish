@@ -128,11 +128,17 @@ my_list.clear()
 ```
 
 **Maps**:
-Initialize maps natively using the `Map` constructor keyword:
+Initialize maps natively using the `Map` constructor keyword combined with a JSON-like object notation:
 ```bash
-let my_map = Map("name", "Ish", "version", "1.0")
-out "Shell Name: $my_map[name]"
+let my_map = Map({
+    "name": "Ish",
+    "version": "1.0"
+})
+out "Shell Name: $my_map[\"name\"]"
 ```
+
+> [!IMPORTANT]
+> **Strict Indexing**: When accessing elements from a Map or Array, the index must be explicitly quoted if it is a string (e.g., `["key"]`), a valid integer, or a variable (e.g., `[$var]`). Unquoted literal keys like `[key]` will throw an execution error.
 
 ## Math & Subshells
 
@@ -198,6 +204,9 @@ try {
 ## Functions & Returns
 
 Functions allow you to encapsulate logic securely using the `func` keyword. Variables declared within a function are entirely isolated.
+
+> [!IMPORTANT]
+> **No Nested Declarations**: To enforce structural integrity, you cannot declare a `func`, `class`, `struct`, or `enum` inside a method body or any code block. Declarations must remain at the class or namespace level.
 
 ### Strict Returns
 To enforce maintainable programming rules, the `return` statement has strict behavioral validation:
