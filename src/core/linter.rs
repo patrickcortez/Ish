@@ -77,53 +77,13 @@ impl Linter {
 
     fn check_node(&mut self, node: &AstNode) -> Result<(), IshError> {
         match &node.kind {
-            AstNodeKind::Command { program, args, redirect_to, redirect_from, .. } => {
-                if program.is_empty() {
-                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Empty command detected", node.line, node.column)));
-                }
-
-                self.check_variables_in_string(program, node.line, node.column)?;
-                for arg in args {
-                    self.check_variables_in_string(arg, node.line, node.column)?;
-                }
-
-                if !program.starts_with('$') {
-                    if let Some(expected_args) = self.defined_functions.get(program) {
-                        if args.len() != *expected_args {
-                            return Err(IshError::ParseError(format!(
-                                "Linter Error at Line {}, Column {}: Function '{}' expects {} arguments, but got {}",
-                                node.line, node.column, program, expected_args, args.len()
-                            )));
-                        }
-                    }
-                }
-
-                if redirect_to.is_some() && redirect_to == redirect_from {
-                    return Err(IshError::ParseError(format!(
-                        "Linter Error at Line {}, Column {}: Cannot redirect to and from the same file '{}'",
-                        node.line, node.column,
-                        redirect_to.as_ref().unwrap()
-                    )));
-                }
-            }
-            AstNodeKind::Pipeline(nodes) => {
-                if nodes.len() < 2 {
-                    return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Pipeline requires at least two commands", node.line, node.column)));
-                }
-                for n in nodes {
-                    self.check_node(n)?;
-                }
-            }
-            AstNodeKind::Sequential(left, right)
-            | AstNodeKind::AndThen(left, right)
-            | AstNodeKind::OrElse(left, right)
-            | AstNodeKind::Parallel(left, right) => {
-                self.check_node(left)?;
-                self.check_node(right)?;
-            }
             AstNodeKind::BinaryOp { left, right, .. } => {
                 self.check_node(left)?;
                 self.check_node(right)?;
+            }
+            AstNodeKind::IndexAccess { object, index } => {
+                self.check_node(object)?;
+                self.check_node(index)?;
             }
             AstNodeKind::UnaryOp { operand, .. } => {
                 self.check_node(operand)?;
@@ -132,10 +92,6 @@ impl Linter {
                 self.check_node(condition)?;
                 self.check_node(true_value)?;
                 self.check_node(false_value)?;
-            }
-
-            AstNodeKind::Background(inner) => {
-                self.check_node(inner)?;
             }
             AstNodeKind::If { condition, body, else_body } => {
                 self.check_node(condition)?;
@@ -211,7 +167,7 @@ impl Linter {
                 self.defined_vars.pop();
                 self.in_loop_depth -= 1;
             }
-            AstNodeKind::Assignment { variable, index: _, value, is_declaration } => {
+            AstNodeKind::Assignment { variable, index: _, value, is_declaration, .. } => {
                 if variable.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Assignment missing variable name", node.line, node.column)));
                 }
@@ -265,35 +221,25 @@ impl Linter {
             AstNodeKind::StringLiteral(s) => {
                 self.check_variables_in_string(s, node.line, node.column)?;
             }
+            AstNodeKind::Variable(_) => {}
             AstNodeKind::Return(inner) => {
                 fn check_invalid_return(n: &AstNode) -> Option<String> {
                     match &n.kind {
-                        AstNodeKind::Command { program, .. } => {
-                            let invalid_cmds = ["out", "show", "cd", "export", "alias", "unalias", "kill", "fg", "jobs", "declare", "let"];
-                            if invalid_cmds.contains(&program.as_str()) {
-                                return Some(program.clone());
+                        AstNodeKind::Assignment { value, .. } => check_invalid_return(value),
+                        AstNodeKind::BinaryOp { left, right, .. } => {
+                            if let Some(err) = check_invalid_return(left) {
+                                return Some(err);
                             }
+                            check_invalid_return(right)
                         }
-                        AstNodeKind::Pipeline(commands) => {
-                            if let Some(last) = commands.last() {
-                                return check_invalid_return(last);
-                            }
-                        }
-                        AstNodeKind::Subshell(inner_sub) => {
-                            return check_invalid_return(inner_sub);
-                        }
-                        _ => {}
+                        _ => None,
                     }
-                    None
                 }
                 
                 if let Some(invalid_cmd) = check_invalid_return(inner) {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: cannot return command '{}'. Returns can only return values or variables.", node.line, node.column, invalid_cmd)));
                 }
 
-                self.check_node(inner)?;
-            }
-            AstNodeKind::Subshell(inner) => {
                 self.check_node(inner)?;
             }
             AstNodeKind::Array(items) => {
@@ -312,7 +258,7 @@ impl Linter {
                     self.check_node(stmt)?;
                 }
             }
-            AstNodeKind::ClassDecl { methods, fields, constructor, destructor, .. } => {
+            AstNodeKind::ClassDecl { methods, fields, constructor, destructor, base_class: _, .. } => {
                 if let Some(c) = constructor {
                     self.defined_vars.push(std::collections::HashSet::new());
                     self.function_bases.push(self.defined_vars.len() - 1);
@@ -374,6 +320,25 @@ impl Linter {
             AstNodeKind::ObjectInstantiation { args, .. } => {
                 for arg in args {
                     self.check_node(arg)?;
+                }
+            }
+            AstNodeKind::Switch { expression, cases, default_case } => {
+                self.check_node(expression)?;
+                for (case_expr, body) in cases {
+                    self.check_node(case_expr)?;
+                    for stmt in body {
+                        self.check_node(stmt)?;
+                    }
+                }
+                if let Some(body) = default_case {
+                    for stmt in body {
+                        self.check_node(stmt)?;
+                    }
+                }
+            }
+            AstNodeKind::InterpolatedString(nodes) => {
+                for node in nodes {
+                    self.check_node(node)?;
                 }
             }
             AstNodeKind::MethodCall { object, args, .. } => {

@@ -1,12 +1,10 @@
-# Table of Contents
+# Ish Programming Language
 
+## Table of Contents
 1. [Overview](#overview)
 2. [Features](#features)
-3. [Strcuture](#structure)
+3. [Structure](#structure)
 4. [Installation](#installation)
-  
-   4.1 [Uninstallation](#uninstall)
-  
 5. [Documentations](#documentations)
 6. [License](#license)
 
@@ -14,118 +12,85 @@
 
 ## Overview
 
-**Ish** or *Inter-Shell* is a cross platform system shell with a suggestion engine that suggests what
-the next possible command is. The purpose of the shell is to make the command-line
-experience of the user as convenient as possible while making it aesthetically pleasing.
-
-Developed in *Rust* using *Ratatui*. It's a hobbyist system shell that ultimately prioritizes
-the experience of the user.
+**Ish** (Inter-Shell) is a cross-platform, natively compiled Object-Oriented Programming (OOP) language built in *Rust*. What started as a hobbyist shell has evolved into a fully-fledged, strongly-typed programming language that prioritizes a seamless development experience.
 
 > ***Info:***
-> This shell is still under development by a single developer.
+> This language is still under active development by a single developer.
 > Expect a few bugs while using it.
 
 ---
 
 ## Features
 
-**Ish** has lots of features that offers to the user:
+**Ish** brings a robust, modern feature set for developers:
 
-- `Piping`: ':' pipes the stdout of the previous process to the stdin of the next process.
-
-- `Redirection`: "to" or "from" redirects the stdout,stderr or stdin of the previous process to the next process.
-
-- `Continous Execution`: instead of a ';' we use the literal word: "then".
-
-- `Parallel Execution`: instead of a '&' we use the literal word: "while".
-
-- `Operational Execution`: instead of a '&&' or '||' we use the literal words: "and then" and "or else" respectively (though `&&` and `||` are natively supported aliases!).
-
-- `Jobs` : instead of the typical & at the end for background processes, we use the literal word "job" at the end: `./myprog.exe job`.
-
-- `Core Utilities` : Internal built-in commands like `out`, `show`, `read`, `create`, `change` map directly to internal executions to ensure consistency across operating systems. A robust recursive descent math evaluator is built-in as `expr`.
-
-- `History` : A persistent disk backed history, accessible with arrow up/down. Stored at `./local/history.txt`.
-
-- `Command Execution` : For executing commands the shell will use what ever tools/commands and user installed pacakages/apps is available in the OS. Linux: /usr/bin, MacOS: /bin, Windows: {Find *WSL* Path then /usr/bin, if *WSL* is not installed then we use PowerShell and use their cmdlets and properly pipe Objects}
-
-- `Suggestions` : *Suggestions* is a ghost text that predicts the next possible command, file or directory based on the OS.
-
-- `Job Control` : As with every shell this provides a way to control the jobs running in the background. You can bring them to the foreground with "fg", background with "bg" and kill with "kill" and many more tools to achieve sophisticated job management.
-
-- `Scripting Environment` : For scripting, **Ish** is an **Object-Oriented Programming (OOP) language**, meaning scripts are structurally organized using `namespace`, `class`, and `struct`. It natively supports variables (with string interpolation), `[1,2,3]` Arrays, `Map(k, v)` Maps, if/elif/else blocks, loops (for, while and foreach with `break` and `continue`), and functions. It enforces strict execution by requiring every script to contain a `public static class Program { public static func main() }` entry point. With the `.ish` extension, *.ish* script files can be executed directly `./myscript.ish` as long as the syntax passes the *Linter*. **Ish** includes an advanced Location-Aware Linter that will pinpoint exactly which line and column a syntax error occurred on to make debugging your scripts seamless.
-
-- `Startup Script` : A proper shell should have its own start-up script, which obviously is named `.ishrc`.
-which holds the startup configuration of **Ish**.
-
-- `Configuration Commands` : These are special built in commands only available to **Ish**:
-  - `:Toggle <flags: --autocd (true/false),--suggestions (true/false)>` toggles *Auto-Suggest* with the prefix '[' and suffix ']', its **on** by default. toggles *Suggestions* on or off its on by default.
-  The configs are then saved in the `.ishrc` file and will be applied on the next run of **Ish**.
-  - `:Editor <editor name>` sets the default text editor to be used for automatic editing of text files with the prefix '@'.
+- **Object-Oriented Architecture**: Ish scripts are structurally organized using `namespace`, `class`, and `struct`. 
+- **Inheritance & Static Methods**: Natively supports deep class inheritance (`class Dog : Animal`) and static execution chains.
+- **Strict Typing & Generics**: Supports built-in Generics (`List<T>`) for strongly-typed instantiation.
+- **Robust Syntax**: Implements clean language constructs, strict parenthesis `()` enforcement, and natively evaluates complex math dynamically without string hacks.
+- **Advanced Control Flow**: Supports nested `if/elif/else`, `switch/case` statements, and iterative loops (`for`, `while`, `foreach`).
+- **Memory Management**: Includes a fully automatic Memory Management System (MMS) called **The Gobbler** which utilizes rigorous Mark-and-Sweep algorithms to safely unallocate memory without manual intervention.
+- **Location-Aware Linter**: Includes an advanced Linter that will pinpoint exactly which line and column a syntax error occurred on, making script debugging entirely seamless.
+- **Program Entry Point**: Enforces strict execution architecture by requiring every `.ish` script to contain a `public static class Program { public static func main() }` entry point.
 
 ---
 
 ## Structure
 
-The structure of the **Ish** interpreter is as follows:
+The architecture of the **Ish** execution pipeline is highly modularized into core language components:
 
 ```mermaid
 graph TD
-    subgraph "Ish"
-        Input[Input Box]
-        Output[Output Box]
-        Suggestions[Suggestions Box]
-        Banner[Banner Box]
-    end
-    
-    subgraph "Components"
+    subgraph "Ish Language Engine"
         Tokenizer[Tokenizer]
         Parser[Parser]
         Linter[Linter]
+        Registry[Registry]
         Executor[Executor]
-        History[History Manager]
-        SuggestionEngine[Suggestion Engine]
-        JobController[Job Controller]
-        Config[Configuration Manager]
+        Gobbler[MMS: The Gobbler]
     end
     
-    Input --> Tokenizer
     Tokenizer --> Parser
     Parser --> Linter
-    Linter --> Executor
-    Executor --> Output
-    Executor --> JobController
-    SuggestionEngine --> Suggestions
-    Config --> Output
-    History --> Input
-    History --> Suggestions
+    Linter --> Registry
+    Registry --> Executor
+    Executor --> Gobbler
     
-    style Ish fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style Components fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-
+    style Tokenizer fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style Executor fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
 ```
 
 ---
 
 ## Installation
 
-Make sure you have the following:
-
+Make sure you have the following requirements installed:
 - *Rust*
 - *Make*
 
-After acquiring the required packages. simply do `make install` then wait for it to successfully install.
-After installing you can simply run: `ish`.
+After cloning the repository, simply execute:
+```bash
+make install
+```
+Then wait for the language binaries to build and install successfully. 
+
+### Execution
+After installing, you can execute `.ish` scripts natively by running:
+```bash
+ish myscript.ish
+```
 
 ### Uninstall
 
-To uninstall **Ish** simply do `make uninstall`. This will remove **Ish** from your system.
+To uninstall **Ish**, simply do `make uninstall`. This will securely remove the binaries from your system.
 
 ---
 
 ## Documentations
 
-For more information about **Ish** and its features, see [docs](/docs/) folder.
+For more details on writing Ish scripts, checking out the robust OOP capabilities, and learning about standard libraries, see the [docs](/docs/) folder:
+- [Ish Programming Language Guide](/docs/ish_scripting_guide.md)
+- [Standard Libraries](/docs/Standard_libs.md)
 
 ---
 

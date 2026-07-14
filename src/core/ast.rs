@@ -21,6 +21,7 @@ pub enum AccessSpecifier {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     pub name: String,
+    pub type_specifier: Option<String>,
     pub is_array: bool,
     pub is_variadic: bool,
     pub default_value: Option<Box<AstNode>>,
@@ -60,37 +61,11 @@ impl AstNode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstNodeKind {
-    /// A basic command (e.g., `ls -l`)
-    Command {
-        program: String,
-        args: Vec<String>,
-        redirect_to: Option<String>,
-        redirect_from: Option<String>,
-        append_to: Option<String>,
-        read_doc: Option<String>,
-        merge_err: bool,
-    },
-
-    /// Piped commands (e.g., `cmd1 : cmd2 : cmd3`)
-    Pipeline(Vec<AstNode>),
-
-    /// Sequential execution (e.g., `cmd1 then cmd2`)
-    Sequential(Box<AstNode>, Box<AstNode>),
-
-    /// Logical AND (e.g., `cmd1 and then cmd2`)
-    AndThen(Box<AstNode>, Box<AstNode>),
-
-    /// Logical OR (e.g., `cmd1 or else cmd2`)
-    OrElse(Box<AstNode>, Box<AstNode>),
-
-    /// Parallel execution (e.g., `cmd1 while cmd2`)
-    Parallel(Box<AstNode>, Box<AstNode>),
-
-    /// Background execution (e.g., `cmd job`)
-    Background(Box<AstNode>),
-
     /// String Literal
     StringLiteral(String),
+
+    /// Variable Reference
+    Variable(String),
 
     /// If conditional
     If {
@@ -108,6 +83,7 @@ pub enum AstNodeKind {
 
     /// Variable assignment
     Assignment {
+        type_specifier: Option<String>,
         variable: String,
         index: Option<Box<AstNode>>,
         value: Box<AstNode>,
@@ -154,9 +130,6 @@ pub enum AstNodeKind {
         catch_body: Vec<AstNode>,
     },
 
-    /// Subshell execution that returns a value (e.g. `$(...)`)
-    Subshell(Box<AstNode>),
-
     /// Return statement
     Return(Box<AstNode>),
 
@@ -177,6 +150,7 @@ pub enum AstNodeKind {
     /// OOP: Class Declaration
     ClassDecl {
         name: String,
+        base_class: Option<String>,
         access: AccessSpecifier,
         is_static: bool,
         methods: Vec<AstNode>,
@@ -224,4 +198,20 @@ pub enum AstNodeKind {
         object: Box<AstNode>,
         property_name: String,
     },
+
+    /// OOP: Index Access (`$obj[0]`)
+    IndexAccess {
+        object: Box<AstNode>,
+        index: Box<AstNode>,
+    },
+
+    /// Switch Statement
+    Switch {
+        expression: Box<AstNode>,
+        cases: Vec<(AstNode, Vec<AstNode>)>,
+        default_case: Option<Vec<AstNode>>,
+    },
+
+    /// Interpolated String (`$"value is {val}"`)
+    InterpolatedString(Vec<AstNode>),
 }

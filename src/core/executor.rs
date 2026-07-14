@@ -25,6 +25,7 @@ pub struct Executor {
     /// Tracks which class context we are currently executing within (for access checks).
     pub current_class: Option<String>,
     pub gobbler: Gobbler,
+    pub is_evaluating: bool,
 }
 
 impl Executor {
@@ -40,10 +41,50 @@ impl Executor {
             returning: false,
             breaking: false,
             continuing: false,
-            stdlib_providers: vec![Box::new(IshStr), Box::new(IshFS), Box::new(IshTime), Box::new(IshNet), Box::new(IshOS)],
+            stdlib_providers: vec![Box::new(crate::core::stdlib::IshCommandLine), Box::new(IshStr), Box::new(IshFS), Box::new(crate::core::stdlib::IshMath), Box::new(IshTime), Box::new(IshNet), Box::new(IshOS), Box::new(crate::core::stdlib::IshExtProc)],
             registry: Registry::new(),
             current_class: None,
             gobbler: Gobbler::new(),
+            is_evaluating: false,
+        }
+    }
+
+    pub fn value_to_string(&self, val: &crate::core::ast::IshValue) -> String {
+        match val {
+            crate::core::ast::IshValue::String(s) => s.clone(),
+            crate::core::ast::IshValue::Int(i) => i.to_string(),
+            crate::core::ast::IshValue::Float(f) => f.to_string(),
+            crate::core::ast::IshValue::Bool(b) => b.to_string(),
+            crate::core::ast::IshValue::Null => "null".to_string(),
+            crate::core::ast::IshValue::Reference(id) => {
+                if let Some(obj) = self.gobbler.get(*id) {
+                    match obj {
+                        crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                            if arr.is_empty() {
+                                "object[]".to_string()
+                            } else {
+                                match &arr[0] {
+                                    crate::core::ast::IshValue::String(_) => "string[]".to_string(),
+                                    crate::core::ast::IshValue::Int(_) => "int[]".to_string(),
+                                    crate::core::ast::IshValue::Float(_) => "float[]".to_string(),
+                                    crate::core::ast::IshValue::Bool(_) => "bool[]".to_string(),
+                                    _ => "object[]".to_string(),
+                                }
+                            }
+                        }
+                        crate::core::gobbler::HeapObject::Map(_) | crate::core::gobbler::HeapObject::Object { .. } => {
+                            let class_name = if let crate::core::gobbler::HeapObject::Object { class_name, .. } = obj {
+                                class_name.clone()
+                            } else {
+                                "Map".to_string()
+                            };
+                            class_name
+                        }
+                    }
+                } else {
+                    "null".to_string()
+                }
+            }
         }
     }
 
@@ -104,6 +145,9 @@ impl Executor {
     }
 
     fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
+        // Shell-style variable expansion for legacy compatibility
+        // Supports: $((math)), $(subshell), $? (exit code), $0 (script name), $VAR (environment)
+        // This is separate from native Ish variable resolution (see evaluate_node -> Variable case)
         let mut result = String::new();
         let mut chars = s.chars().peekable();
         
@@ -249,7 +293,7 @@ impl Executor {
                                     }
                                 }
                             }
-                            result.push_str(&final_val.to_string());
+                            result.push_str(&self.value_to_string(&final_val));
                             found = true;
                             break;
                         }
@@ -298,12 +342,7 @@ impl Executor {
             }
             Err(IshError::ExecutionError(e)) if e.starts_with("program not found: ") => {
                 let _ = std::fs::remove_file(&temp_path);
-                if let AstNodeKind::Command { program, args, .. } = &node.kind {
-                    let expected_err = format!("program not found: {}", self.resolve_var(program, jobs)?);
-                    if e == expected_err && args.is_empty() {
-                        return Ok(self.resolve_var(program, jobs)?);
-                    }
-                }
+                
                 Err(IshError::ExecutionError(e))
             }
             Err(e) => {
@@ -315,6 +354,65 @@ impl Executor {
 
     pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
+            AstNodeKind::InterpolatedString(nodes) => {
+                let mut result = String::new();
+                for n in nodes {
+                    match self.evaluate_node(n, jobs)? {
+                        IshValue::String(s) => result.push_str(&s),
+                        IshValue::Int(i) => result.push_str(&i.to_string()),
+                        IshValue::Float(f) => result.push_str(&f.to_string()),
+                        IshValue::Bool(b) => result.push_str(&b.to_string()),
+                        _ => result.push_str(&self.evaluate_node(n, jobs)?.to_string()),
+                    }
+                }
+                Ok(IshValue::String(result))
+            }
+            AstNodeKind::Variable(var_name) => {
+                // Native Ish variable resolution - searches through variable scopes
+                // This is separate from shell-style variable expansion (see resolve_var function)
+                let base_idx = *self.function_bases.last().unwrap_or(&0);
+                let mut search_scopes = vec![];
+                for i in (base_idx..self.variables.len()).rev() {
+                    search_scopes.push(i);
+                }
+                if base_idx != 0 {
+                    search_scopes.push(0);
+                }
+                for i in search_scopes {
+                    if let Some(val) = self.variables[i].get(var_name) {
+                        return Ok(val.clone());
+                    }
+                }
+                // Allow class names and stdlib providers to be used as string values
+                if self.registry.classes.contains_key(var_name) || var_name == "CommandLine" || var_name == "Math" || var_name == "Str" || var_name == "Time" || var_name == "Net" || var_name == "OS" || var_name == "ExtProc" || var_name == "FS" {
+                    return Ok(IshValue::String(var_name.clone()));
+                }
+                Err(crate::error::IshError::ExecutionError(format!("Variable '{}' is not defined in this scope", var_name)))
+            }
+            AstNodeKind::IndexAccess { object, index } => {
+                let obj_val = self.evaluate_node(object, jobs)?;
+                let index_val = self.evaluate_node(index, jobs)?;
+                if let IshValue::Reference(id) = obj_val {
+                    if let Some(heap_obj) = self.gobbler.get(id) {
+                        match heap_obj {
+                            crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                let idx_str = index_val.to_string();
+                                if let Ok(idx) = idx_str.parse::<usize>() {
+                                    if idx < arr.len() {
+                                        return Ok(arr[idx].clone());
+                                    } else {
+                                        return Err(IshError::ExecutionError(format!("IndexOutOfRangeException: {}", idx)));
+                                    }
+                                } else {
+                                    return Err(IshError::ExecutionError(format!("TypeError: Invalid array index {}", idx_str)));
+                                }
+                            }
+                            _ => return Err(IshError::ExecutionError(format!("TypeError: Cannot index into non-array/list type"))),
+                        }
+                    }
+                }
+                Err(IshError::ExecutionError(format!("TypeError: Cannot index into non-array/list type")))
+            }
             AstNodeKind::StringLiteral(s) => {
                 if (s.starts_with('$') || s == "this") && !s.contains(" ") && !s.contains("(") && !s.contains("{") {
                     let var_name = if s == "this" { "this" } else { &s[1..] };
@@ -506,60 +604,6 @@ impl Executor {
                     self.evaluate_node(false_value, jobs)
                 }
             }
-            AstNodeKind::Subshell(inner) => {
-                let out = self.capture_output(inner, jobs)?;
-                if let Ok(i) = out.parse::<i32>() {
-                    Ok(IshValue::Int(i))
-                } else if let Ok(f) = out.parse::<f32>() {
-                    Ok(IshValue::Float(f))
-                } else if out == "true" {
-                    Ok(IshValue::Bool(true))
-                } else if out == "false" {
-                    Ok(IshValue::Bool(false))
-                } else if out == "null" {
-                    Ok(IshValue::Null)
-                } else {
-                    Ok(IshValue::String(out))
-                }
-            }
-            AstNodeKind::Command { program, args, .. } => {
-                if program.starts_with('$') && args.is_empty() {
-                    let resolved = self.resolve_var(program, jobs)?;
-                    if let Ok(i) = resolved.parse::<i32>() {
-                        Ok(IshValue::Int(i))
-                    } else if let Ok(f) = resolved.parse::<f32>() {
-                        Ok(IshValue::Float(f))
-                    } else if resolved == "true" {
-                        Ok(IshValue::Bool(true))
-                    } else if resolved == "false" {
-                        Ok(IshValue::Bool(false))
-                    } else if resolved == "null" {
-                        Ok(IshValue::Null)
-                    } else {
-                        Ok(IshValue::String(resolved))
-                    }
-                } else if args.is_empty() && (program.parse::<f64>().is_ok() || program == "true" || program == "false" || program == "null") {
-                    if let Ok(i) = program.parse::<i32>() {
-                        Ok(IshValue::Int(i))
-                    } else if let Ok(f) = program.parse::<f32>() {
-                        Ok(IshValue::Float(f))
-                    } else if program == "true" {
-                        Ok(IshValue::Bool(true))
-                    } else if program == "false" {
-                        Ok(IshValue::Bool(false))
-                    } else {
-                        Ok(IshValue::Null)
-                    }
-                } else {
-                    self.return_value = None;
-                    self.execute_node_with_input(node, "", None, jobs)?;
-                    if let Some(val) = self.return_value.take() {
-                        Ok(val)
-                    } else {
-                        Ok(IshValue::Null)
-                    }
-                }
-            }
             _ => {
                 self.return_value = None;
                 self.execute_node_with_input(node, "", None, jobs)?;
@@ -633,10 +677,8 @@ impl Executor {
                 
                 return Ok(true);
             }
-            Err(_) => {
-                Err(IshError::ExecutionError(
-                    "Script must define 'public static class Program' with a 'public static func Main(params let[] args)' method.".to_string()
-                ))
+            Err(e) => {
+                Err(e)
             }
         }
     }
@@ -658,649 +700,7 @@ impl Executor {
     pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError>
     {
         match &node.kind {
-            AstNodeKind::Subshell(inner) => {
-                let val = self.evaluate_node(inner, jobs)?;
-                self.return_value = Some(val);
-                Ok(true)
-            }
-            AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } => {
-                let resolved_program = self.resolve_var(program, jobs)?;
-                let mut resolved_args = Vec::new();
-                for arg in args {
-                                resolved_args.push(self.resolve_var(arg, jobs)?);
-                }
-
-                if let Some((params, body)) = self.resolve_callable(&resolved_program) {
-                    let mut evaluated_params = Vec::new();
-                    let mut arg_idx = 0;
-                    for param in &params {
-                        if param.is_variadic {
-                            let mut variadic_arr = Vec::new();
-                            while arg_idx < resolved_args.len() {
-                                variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
-                                arg_idx += 1;
-                            }
-                            let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
-                            evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
-                        } else {
-                            if arg_idx < resolved_args.len() {
-                                evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
-                                arg_idx += 1;
-                            } else {
-                                if let Some(default_expr) = &param.default_value {
-                                    let val = self.evaluate_node(default_expr, jobs)?;
-                                    evaluated_params.push((param.name.clone(), val));
-                                } else {
-                                    evaluated_params.push((param.name.clone(), IshValue::Null));
-                                }
-                            }
-                        }
-                    }
-
-                    let mut this_val = None;
-                    for scope in self.variables.iter().rev() {
-                        if let Some(val) = scope.get("this") {
-                            this_val = Some(val.clone());
-                            break;
-                        }
-                    }
-
-                    self.variables.push(HashMap::new());
-                    self.function_bases.push(self.variables.len() - 1);
-                    
-                    if let Some(scope) = self.variables.last_mut() {
-                        if let Some(t) = this_val {
-                            scope.insert("this".to_string(), t);
-                        }
-                        for (k, v) in evaluated_params {
-                            scope.insert(k, v);
-                        }
-                        for (i, arg) in resolved_args.iter().enumerate() {
-                            scope.insert((i + 1).to_string(), IshValue::String(arg.clone()));
-                        }
-                    }
-
-                    let mut success = true;
-                    for stmt in body.iter() {
-                        if self.returning { break; }
-                        success = self.execute_node_with_input(stmt, input, out_file, jobs)?;
-                    }
-
-                    self.returning = false;
-                    self.function_bases.pop();
-                    let _ = self.pop_scope(jobs);
-                    self.last_exit_code = if success { 0 } else { 1 };
-                    return Ok(success);
-                }
-
-                let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
-
-                for provider in &self.stdlib_providers {
-                    if provider.handles_command(&final_program) {
-                        match provider.execute(&final_program, &final_args) {
-                            Ok(output) => {
-                                self.last_exit_code = 0;
-                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
-                                
-                                if let Some(path) = out_file {
-                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                    let _ = file.write_all(output.as_bytes());
-                                } else if let Some(path) = redirect_to {
-                                    if path != "DevNull" {
-                                        let mut file = File::create(path)?;
-                                        let _ = file.write_all(output.as_bytes());
-                                    }
-                                } else if let Some(path) = append_to {
-                                    if path != "DevNull" {
-                                        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                        let _ = file.write_all(output.as_bytes());
-                                    }
-                                } else {
-                                     if !out_str.trim().is_empty() {
-                                        print!("{}", out_str);
-                                        let _ = std::io::stdout().flush();
-                                    }
-                                }
-                                return Ok(true);
-                            }
-                            Err(e) => {
-                                return Err(e);
-                            }
-                        }
-                    }
-                }
-
-                let mut internal_result = match final_program.as_str() {
-                    "jobs" => Ok(Some(crate::core::ast::IshValue::String(jobs.list_jobs()))),
-                    "fg" => {
-                        if final_args.is_empty() {
-                            Err("fg error: expected job id".to_string())
-                        } else if let Ok(id) = final_args[0].parse::<u32>() {
-                            match jobs.wait_job(id) {
-                                Ok(msg) => Ok(Some(crate::core::ast::IshValue::String(msg + "\n"))),
-                                Err(e) => Err(e),
-                            }
-                        } else {
-                            Err("fg error: invalid job id".to_string())
-                        }
-                    }
-                    "kill" => {
-                        if final_args.is_empty() {
-                            Err("kill error: expected job id".to_string())
-                        } else if let Ok(id) = final_args[0].parse::<u32>() {
-                            match jobs.kill_job(id) {
-                                Ok(msg) => Ok(Some(crate::core::ast::IshValue::String(msg + "\n"))),
-                                Err(e) => Err(e),
-                            }
-                        } else {
-                            Err("kill error: invalid job id".to_string())
-                        }
-                    }
-                    _ => crate::core::utils::execute_internal(&final_program, &final_args, &mut self.gobbler)
-                };
-
-                if let Ok(None) = internal_result {
-                    if let Ok(Some(translated)) = crate::core::os_interceptor::translate_and_execute(&final_program, &final_args) {
-                        internal_result = Ok(Some(crate::core::ast::IshValue::String(translated)));
-                    }
-                }
-
-                match internal_result {
-                    Ok(Some(output_val)) => {
-                        self.last_exit_code = 0;
-                        if let Some(path) = out_file {
-                            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            let _ = file.write_all(output_val.to_string().as_bytes());
-                        } else if let Some(path) = redirect_to {
-                            if path != "DevNull" {
-                                let mut file = File::create(path)?;
-                                let _ = file.write_all(output_val.to_string().as_bytes());
-                            }
-                        } else if let Some(path) = append_to {
-                            if path != "DevNull" {
-                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                let _ = file.write_all(output_val.to_string().as_bytes());
-                            }
-                        } else {
-                            let output = output_val.to_string();
-                            if !output.trim().is_empty() {
-                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
-                                print!("{}", out_str);
-                                let _ = std::io::stdout().flush();
-                            }
-                        }
-                        return Ok(true);
-                    }
-                    Err(e) => {
-                        self.last_exit_code = 1;
-                        if *merge_err {
-                            if let Some(path) = out_file {
-                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                let _ = file.write_all(e.as_bytes());
-                            } else if let Some(path) = redirect_to {
-                                if path != "DevNull" {
-                                    let mut file = File::create(path)?;
-                                    let _ = file.write_all(e.as_bytes());
-                                }
-                            } else {
-                                eprintln!("{}", e);
-                            }
-                        } else {
-                            eprintln!("{}", e);
-                        }
-                        return Ok(false);
-                    }
-                    Ok(None) => {}
-                }
-
-                let mut cmd = Command::new(&final_program);
-                cmd.args(&final_args);
-
-                if let Some(path) = out_file {
-                    let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                    cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                    if *merge_err { cmd.stderr(Stdio::from(file)); }
-                } else if let Some(path) = redirect_to {
-                    if path == "DevNull" {
-                        cmd.stdout(Stdio::null());
-                        if *merge_err { cmd.stderr(Stdio::null()); }
-                    } else {
-                        let file = File::create(path)?;
-                        cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                        if *merge_err { cmd.stderr(Stdio::from(file)); }
-                    }
-                } else if let Some(path) = append_to {
-                    if path == "DevNull" {
-                        cmd.stdout(Stdio::null());
-                        if *merge_err { cmd.stderr(Stdio::null()); }
-                    } else {
-                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                        cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                        if *merge_err { cmd.stderr(Stdio::from(file)); }
-                    }
-                } else {
-                    cmd.stdout(Stdio::inherit());
-                }
-                
-                if !*merge_err || (redirect_to.is_none() && append_to.is_none()) {
-                    cmd.stderr(Stdio::inherit());
-                }
-
-                if let Some(path) = redirect_from {
-                    if path == "DevNull" {
-                        cmd.stdin(Stdio::null());
-                    } else {
-                        let file = File::open(path)?;
-                        cmd.stdin(Stdio::from(file));
-                    }
-                } else if read_doc.is_some() {
-                    cmd.stdin(Stdio::piped());
-                } else if !input.is_empty() {
-                    cmd.stdin(Stdio::piped());
-                } else {
-                    cmd.stdin(Stdio::inherit());
-                }
-
-                let mut child = cmd.spawn().map_err(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        println!("DEBUG: Command failed: final_program={}, resolved_args={:?}", final_program, resolved_args);
-                        IshError::ExecutionError(format!("program not found: {}", final_program))
-                    } else {
-                        IshError::ExecutionError(e.to_string())
-                    }
-                })?;
-
-                if let Some(doc) = read_doc {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = stdin.write_all(doc.as_bytes());
-                    }
-                } else if !input.is_empty() {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = stdin.write_all(input.as_bytes());
-                    }
-                }
-
-                let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
-
-                Ok(status.success())
-            }
-            AstNodeKind::Sequential(left, right) => {
-                let _s1 = self.execute_node_with_input(left, input, out_file, jobs)?;
-                let s2 = self.execute_node_with_input(right, "", out_file, jobs)?;
-                Ok(s2)
-            }
-            AstNodeKind::AndThen(left, right) => {
-                let success = self.execute_node_with_input(left, input, out_file, jobs)?;
-                if success {
-                    let s2 = self.execute_node_with_input(right, "", out_file, jobs)?;
-                    Ok(s2)
-                } else {
-                    Ok(false)
-                }
-            }
-            AstNodeKind::OrElse(left, right) => {
-                let success = self.execute_node_with_input(left, input, out_file, jobs)?;
-                if !success {
-                    let s2 = self.execute_node_with_input(right, "", out_file, jobs)?;
-                    Ok(s2)
-                } else {
-                    Ok(true)
-                }
-            }
-            AstNodeKind::Pipeline(nodes) => {
-                if nodes.is_empty() {
-                    return Ok(true);
-                }
-
-                let mut previous_stdout: Option<std::process::ChildStdout> = None;
-                let mut internal_output: Option<crate::core::ast::IshValue> = None;
-                let mut children = Vec::new();
-                let mut last_cmd_success = true;
-
-                for (i, node) in nodes.iter().enumerate() {
-                    if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &node.kind {
-                        let resolved_program = self.resolve_var(program, jobs)?;
-                        let mut resolved_args = Vec::new();
-                        for arg in args {
-                            resolved_args.push(self.resolve_var(arg, jobs)?);
-                        }
-
-                        if let Some((params, body)) = self.resolve_callable(&resolved_program) {
-                            let mut evaluated_params = Vec::new();
-                            let mut arg_idx = 0;
-                            for param in &params {
-                                if param.is_variadic {
-                                    let mut variadic_arr = Vec::new();
-                                    while arg_idx < resolved_args.len() {
-                                        variadic_arr.push(IshValue::String(resolved_args[arg_idx].clone()));
-                                        arg_idx += 1;
-                                    }
-                                    let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
-                                    evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
-                                } else {
-                                    if arg_idx < resolved_args.len() {
-                                        evaluated_params.push((param.name.clone(), IshValue::String(resolved_args[arg_idx].clone())));
-                                        arg_idx += 1;
-                                    } else {
-                                        if let Some(default_expr) = &param.default_value {
-                                            let val = self.evaluate_node(default_expr, jobs)?;
-                                            evaluated_params.push((param.name.clone(), val));
-                                        } else {
-                                            evaluated_params.push((param.name.clone(), IshValue::Null));
-                                        }
-                                    }
-                                }
-                            }
-
-                            let mut this_val = None;
-                            for scope in self.variables.iter().rev() {
-                                if let Some(val) = scope.get("this") {
-                                    this_val = Some(val.clone());
-                                    break;
-                                }
-                            }
-
-                            self.variables.push(HashMap::new());
-                            self.function_bases.push(self.variables.len() - 1);
-                            if let Some(scope) = self.variables.last_mut() {
-                                if let Some(t) = this_val {
-                                    scope.insert("this".to_string(), t);
-                                }
-                                for (k, v) in evaluated_params {
-                                    scope.insert(k, v);
-                                }
-                                for (i, arg) in resolved_args.iter().enumerate() {
-                                    scope.insert((i + 1).to_string(), IshValue::String(arg.clone()));
-                                }
-                            }
-                            let mut success = true;
-                            for stmt in body.iter() {
-                                if self.returning { break; }
-                                // FIXME: We should handle piped I/O for function pipelines, but for now just basic out_file works
-                                success = self.execute_node_with_input(stmt, input, out_file, jobs)?;
-                            }
-                            self.returning = false;
-                            self.function_bases.pop();
-                            let _ = self.pop_scope(jobs);
-                            self.last_exit_code = if success { 0 } else { 1 };
-                            last_cmd_success = success;
-                            continue;
-                        }
-
-                        let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
-
-                        let mut stdlib_handled = false;
-                        for provider in &self.stdlib_providers {
-                            if provider.handles_command(&final_program) {
-                                stdlib_handled = true;
-                                match provider.execute(&final_program, &final_args) {
-                                    Ok(output) => {
-                                        self.last_exit_code = 0;
-                                        last_cmd_success = true;
-                                        if i < nodes.len() - 1 {
-                                            // Handle Stdlib provider output strings by parsing them speculatively
-                                            let parsed = crate::core::ast::IshValue::String(output.clone());
-                                            internal_output = Some(parsed);
-                                            let _ = previous_stdout.take();
-                                        } else {
-                                            if let Some(path) = out_file {
-                                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                                let _ = file.write_all(output.as_bytes());
-                                            } else if let Some(path) = redirect_to {
-                                                if path != "DevNull" {
-                                                    let mut file = File::create(path)?;
-                                                    let _ = file.write_all(output.as_bytes());
-                                                }
-                                            } else {
-                                                let out_str = if output.ends_with('\n') { output.clone() } else { format!("{}\n", output) };
-                                                if !out_str.trim().is_empty() {
-                                                    print!("{}", out_str);
-                                                    let _ = std::io::stdout().flush();
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Err(e);
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                        if stdlib_handled {
-                            continue;
-                        }
-
-                        match crate::core::utils::execute_internal(&final_program, &final_args, &mut self.gobbler) {
-                            Ok(Some(output_val)) => {
-                                self.last_exit_code = 0;
-                                last_cmd_success = true;
-                                if i < nodes.len() - 1 {
-                                    internal_output = Some(output_val);
-                                    let _ = previous_stdout.take();
-                                } else {
-                                    let output_str = output_val.to_string();
-                                    if let Some(path) = out_file {
-                                        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                        let _ = file.write_all(output_str.as_bytes());
-                                    } else if let Some(path) = redirect_to {
-                                        if path != "DevNull" {
-                                            let mut file = File::create(path)?;
-                                            let _ = file.write_all(output_str.as_bytes());
-                                        }
-                                    } else {
-                                        print!("{}", output_str);
-                                        let _ = std::io::stdout().flush();
-                                    }
-                                }
-                                continue;
-                            }
-                            Err(e) => {
-                                self.last_exit_code = 1;
-                                last_cmd_success = false;
-                                let err_msg = if *merge_err {
-                                    serde_json::to_string(&serde_json::json!({
-                                        "error": e,
-                                        "status": 1,
-                                    })).unwrap_or(e)
-                                } else {
-                                    e
-                                };
-                                eprintln!("{}", err_msg);
-                                break;
-                            }
-                            Ok(None) => {}
-                        }
-
-                        let mut cmd = Command::new(&final_program);
-                        cmd.args(&final_args);
-
-                        // stdin precedence: explicit redirect > read_doc > pipe from previous > input string
-                        if let Some(path) = redirect_from {
-                            let _ = previous_stdout.take(); // Discard piped input
-                            if path == "DevNull" {
-                                cmd.stdin(Stdio::null());
-                            } else {
-                                let file = File::open(path)?;
-                                cmd.stdin(Stdio::from(file));
-                            }
-                        } else if read_doc.is_some() {
-                            let _ = previous_stdout.take(); // Discard piped input
-                            cmd.stdin(Stdio::piped());
-                        } else if let Some(out_val) = internal_output.take() {
-                            cmd.stdin(Stdio::piped());
-                            internal_output = Some(out_val); // put it back to write later
-                        } else if let Some(stdout) = previous_stdout.take() {
-                            cmd.stdin(Stdio::from(stdout));
-                        } else if i == 0 && !input.is_empty() {
-                            cmd.stdin(Stdio::piped());
-                        } else {
-                            cmd.stdin(Stdio::inherit());
-                        }
-
-                        // stdout precedence: explicit out_file > explicit redirect > append > pipe to next > inherit
-                        let mut piped_stdout = false;
-                        if let Some(path) = out_file.filter(|_| i == nodes.len() - 1) {
-                            let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                            if *merge_err { cmd.stderr(Stdio::from(file)); }
-                        } else if let Some(path) = redirect_to {
-                            if path == "DevNull" {
-                                cmd.stdout(Stdio::null());
-                                if *merge_err { cmd.stderr(Stdio::null()); }
-                            } else {
-                                let file = File::create(path)?;
-                                cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                                if *merge_err { cmd.stderr(Stdio::from(file)); }
-                            }
-                        } else if let Some(path) = append_to {
-                            if path == "DevNull" {
-                                cmd.stdout(Stdio::null());
-                                if *merge_err { cmd.stderr(Stdio::null()); }
-                            } else {
-                                let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                                if *merge_err { cmd.stderr(Stdio::from(file)); }
-                            }
-                        } else if i < nodes.len() - 1 {
-                            cmd.stdout(Stdio::piped());
-                            piped_stdout = true;
-                        } else {
-                            cmd.stdout(Stdio::inherit());
-                        }
-
-                        if !*merge_err || piped_stdout || (redirect_to.is_none() && append_to.is_none()) {
-                            cmd.stderr(Stdio::inherit());
-                        }
-
-                        let mut child = cmd.spawn().map_err(|e| {
-                            if e.kind() == std::io::ErrorKind::NotFound {
-                                println!("DEBUG: Piped command failed: final_program={}", final_program);
-                                IshError::ExecutionError(format!("program not found: {}", final_program))
-                            } else {
-                                IshError::ExecutionError(e.to_string())
-                            }
-                        })?;
-
-                        if let Some(doc) = read_doc {
-                            if let Some(mut stdin) = child.stdin.take() {
-                                let _ = stdin.write_all(doc.as_bytes());
-                            }
-                        } else if let Some(out_val) = internal_output.take() {
-                            if let Some(mut stdin) = child.stdin.take() {
-                                let output_str = out_val.to_string();
-                                let _ = stdin.write_all(output_str.as_bytes());
-                            }
-                        } else if i == 0 && !input.is_empty() && previous_stdout.is_none() {
-                            if let Some(mut stdin) = child.stdin.take() {
-                                let _ = stdin.write_all(input.as_bytes());
-                            }
-                        }
-
-                        if piped_stdout {
-                            previous_stdout = child.stdout.take();
-                        }
-
-                        children.push(child);
-                    } else {
-                        let success = self.execute_node_with_input(node, "", out_file, jobs)?;
-                        last_cmd_success = success;
-                        let _ = previous_stdout.take();
-                    }
-                }
-
-                for mut child in children {
-                    let status = child.wait().map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                    self.last_exit_code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
-                    last_cmd_success = status.success();
-                }
-
-                return Ok(last_cmd_success);
-            }
-            AstNodeKind::Background(inner) => {
-                if let AstNodeKind::Command { program, args, redirect_to, redirect_from, append_to, read_doc, merge_err } = &inner.kind {
-                    let resolved_program = self.resolve_var(program, jobs)?;
-                    let mut resolved_args = Vec::new();
-                    for arg in args {
-                        resolved_args.push(self.resolve_var(arg, jobs)?);
-                    }
-                    if self.functions.contains_key(&resolved_program) {
-                        return Err(IshError::ExecutionError("Cannot run custom functions in background via AstNodeKind::Background currently".into()));
-                    }
-
-                    let (final_program, final_args) = self.resolve_executable(&resolved_program, &resolved_args);
-                    let mut cmd = Command::new(&final_program);
-                    cmd.args(&final_args);
-
-                    if let Some(path) = out_file {
-                        let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                        cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                        if *merge_err { cmd.stderr(Stdio::from(file)); }
-                    } else if let Some(path) = redirect_to {
-                        if path == "DevNull" {
-                            cmd.stdout(Stdio::null());
-                            if *merge_err { cmd.stderr(Stdio::null()); }
-                        } else {
-                            let file = File::create(path)?;
-                            cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                            if *merge_err { cmd.stderr(Stdio::from(file)); }
-                        }
-                    } else if let Some(path) = append_to {
-                        if path == "DevNull" {
-                            cmd.stdout(Stdio::null());
-                            if *merge_err { cmd.stderr(Stdio::null()); }
-                        } else {
-                            let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                            cmd.stdout(Stdio::from(file.try_clone().unwrap()));
-                            if *merge_err { cmd.stderr(Stdio::from(file)); }
-                        }
-                    } else {
-                        cmd.stdout(Stdio::inherit());
-                    }
-                    
-                    if !*merge_err || (redirect_to.is_none() && append_to.is_none()) {
-                        cmd.stderr(Stdio::inherit());
-                    }
-
-                    if let Some(path) = redirect_from {
-                        if path == "DevNull" {
-                            cmd.stdin(Stdio::null());
-                        } else {
-                            let file = File::open(path)?;
-                            cmd.stdin(Stdio::from(file));
-                        }
-                    } else if read_doc.is_some() {
-                        cmd.stdin(Stdio::piped());
-                    } else {
-                        cmd.stdin(Stdio::null());
-                    }
-
-                    match cmd.spawn() {
-                        Ok(mut child) => {
-                            if let Some(doc) = read_doc {
-                                if let Some(mut stdin) = child.stdin.take() {
-                                    let _ = stdin.write_all(doc.as_bytes());
-                                }
-                            }
-                            let job_id = jobs.add_job(child);
-                            println!("[Job started in background] ID: {}", job_id);
-                            Ok(true)
-                        }
-                        Err(e) => {
-                            if e.kind() == std::io::ErrorKind::NotFound {
-                                println!("DEBUG: Background command failed: final_program={}", final_program);
-                                Err(IshError::ExecutionError(format!("program not found: {}", final_program)))
-                            } else {
-                                Err(IshError::ExecutionError(e.to_string()))
-                            }
-                        }
-                    }
-                } else {
-                    Err(IshError::ExecutionError("Only simple commands can run in background currently".into()))
-                }
-            }
-            AstNodeKind::BinaryOp { .. } | AstNodeKind::UnaryOp { .. } | AstNodeKind::TernaryOp { .. } => {
+            AstNodeKind::InterpolatedString(_) | AstNodeKind::BinaryOp { .. } | AstNodeKind::UnaryOp { .. } | AstNodeKind::TernaryOp { .. } => {
                 let val = self.evaluate_node(node, jobs)?;
                 let success = match val {
                     IshValue::Bool(b) => b,
@@ -1310,7 +710,7 @@ impl Executor {
                 Ok(success)
             }
 
-            AstNodeKind::Assignment { variable, index, value, is_declaration } => {
+            AstNodeKind::Assignment { type_specifier, variable, index, value, is_declaration } => {
                 let val = match &value.kind {
                     AstNodeKind::Array(items) => {
                         let mut arr = Vec::new();
@@ -1415,6 +815,35 @@ impl Executor {
                         return Err(IshError::ExecutionError(format!("Variable '{}' is not declared. Use 'declare {} = ...' to declare it.", variable, variable)));
                     }
                 }
+                Ok(true)
+            }
+            AstNodeKind::Switch { expression, cases, default_case } => {
+                let expr_val = self.evaluate_node(expression, jobs)?;
+                let mut matched = false;
+                for (case_expr, body) in cases {
+                    let case_val = self.evaluate_node(case_expr, jobs)?;
+                    if expr_val == case_val {
+                        matched = true;
+                        self.variables.push(std::collections::HashMap::new());
+                        for stmt in body {
+                            self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            if self.returning || self.breaking || self.continuing { break; }
+                        }
+                        self.variables.pop();
+                        break;
+                    }
+                }
+                if !matched {
+                    if let Some(body) = default_case {
+                        self.variables.push(std::collections::HashMap::new());
+                        for stmt in body {
+                            self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            if self.returning || self.breaking || self.continuing { break; }
+                        }
+                        self.variables.pop();
+                    }
+                }
+                if self.breaking { self.breaking = false; }
                 Ok(true)
             }
             AstNodeKind::If { condition, body, else_body } => {
@@ -1553,6 +982,18 @@ impl Executor {
             AstNodeKind::Array(_) | AstNodeKind::Map(_) => {
                 Ok(true)
             }
+            AstNodeKind::Variable(var_name) => {
+                let val = self.evaluate_node(node, jobs)?;
+                let output = val.to_string();
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(output.as_bytes());
+                } else if !output.is_empty() {
+                    print!("{}", output);
+                    let _ = std::io::stdout().flush();
+                }
+                Ok(true)
+            }
             AstNodeKind::StringLiteral(s) => {
                 let resolved = self.resolve_var(s, jobs)?;
                 if let Some(path) = out_file {
@@ -1569,56 +1010,6 @@ impl Executor {
                 self.return_value = Some(val);
                 self.returning = true;
                 Ok(true)
-            }
-            AstNodeKind::Parallel(left, right) => {
-                let mut exec_left = Executor {
-                    script_args: self.script_args.clone(),
-                    last_exit_code: 0,
-                    variables: self.variables.clone(),
-                    function_bases: vec![0],
-                    return_value: None,
-                    functions: self.functions.clone(),
-                    returning: false,
-                    breaking: false,
-                    continuing: false,
-                    stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
-                    registry: self.registry.clone(),
-                    current_class: self.current_class.clone(),
-                    gobbler: self.gobbler.clone(),
-                    static_variables: self.static_variables.clone(),
-                };
-                let mut exec_right = Executor {
-                    script_args: self.script_args.clone(),
-                    last_exit_code: 0,
-                    variables: self.variables.clone(),
-                    function_bases: vec![0],
-                    return_value: None,
-                    functions: self.functions.clone(),
-                    returning: false,
-                    breaking: false,
-                    continuing: false,
-                    stdlib_providers: vec![Box::new(crate::core::stdlib::IshStr)],
-                    registry: self.registry.clone(),
-                    current_class: self.current_class.clone(),
-                    gobbler: self.gobbler.clone(),
-                    static_variables: self.static_variables.clone(),
-                };
-                let left_node = left.clone();
-                let right_node = right.clone();
-                let input_str = input.to_string();
-                let out_str = out_file.map(|s| s.to_string());
-                
-                let handle = std::thread::spawn(move || {
-                    let mut jobs = JobController::new();
-                    exec_left.execute_node_with_input(&left_node, &input_str, out_str.as_deref(), &mut jobs)
-                });
-                
-                let mut right_jobs = JobController::new();
-                let s2 = exec_right.execute_node_with_input(&right_node, "", out_file, &mut right_jobs)?;
-                
-                let s1 = handle.join().unwrap_or(Ok(false))?;
-                
-                Ok(s1 && s2)
             }
 
             // ---- OOP: Namespace, Class, Struct Declarations ----
@@ -1648,15 +1039,21 @@ impl Executor {
 
             // ---- OOP: Object Instantiation ----
             AstNodeKind::ObjectInstantiation { class_name, args } => {
-                if class_name == "List" {
+                let base_class_name = if let Some(idx) = class_name.find('<') {
+                    &class_name[..idx]
+                } else {
+                    class_name.as_str()
+                };
+
+                if base_class_name == "List" {
                     let list_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::List(Vec::new()));
                     self.return_value = Some(IshValue::Reference(list_ref));
                     return Ok(true);
                 }
                 
-                let class_def = self.registry.resolve_class(class_name).cloned();
+                let class_def = self.registry.resolve_class(base_class_name).cloned();
                 let struct_def = if class_def.is_none() {
-                    self.registry.resolve_struct(class_name).cloned()
+                    self.registry.resolve_struct(base_class_name).cloned()
                 } else {
                     None
                 };
@@ -1834,24 +1231,20 @@ impl Executor {
                     }
 
                     if let Some(class_name) = obj_class_name {
-                        let class_def = self.registry.resolve_class(&class_name).cloned()
-                            .ok_or_else(|| IshError::ExecutionError(format!(
-                                "Class '{}' is not defined (method call on object).", class_name
-                            )))?;
-
-                        let method = class_def.methods.get(method_name.as_str())
-                            .ok_or_else(|| IshError::ExecutionError(format!(
-                                "Method '{}' not found on class '{}'.", method_name, class_name
-                            )))?;
+                        let (class_def_clone, method_clone) = {
+                            let (class_def, method) = self.registry.resolve_class_method(&class_name, method_name.as_str())
+                                .ok_or_else(|| IshError::ExecutionError(format!(
+                                    "Method '{}' not found on class '{}' or its base classes.", method_name, class_name
+                                )))?;
+                            (class_def.clone(), method.clone())
+                        };
 
                         // Check access specifier
-                        Registry::check_access(&method.access, self.current_class.as_deref(), &class_def.qualified_name)?;
-
-
+                        Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
 
                         let mut evaluated_params = Vec::new();
                         let mut arg_idx = 0;
-                        for param in &method.params {
+                        for param in &method_clone.params {
                             if param.is_variadic {
                                 let mut variadic_arr = Vec::new();
                                 while arg_idx < eval_args.len() {
@@ -1886,10 +1279,10 @@ impl Executor {
                         }
 
                         let prev_class = self.current_class.clone();
-                        self.current_class = Some(class_def.qualified_name.clone());
-
+                        self.current_class = Some(class_def_clone.qualified_name.clone());
                         let mut success = true;
-                        for stmt in &method.body {
+                        let mut ret_val: Option<IshValue> = None;
+                        for stmt in &method_clone.body {
                             success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                             if self.returning { break; }
                         }
@@ -1912,32 +1305,38 @@ impl Executor {
                 
                 match obj_val {
                     IshValue::String(s) => {
-                        // Check if s is a class name (Static Method Call)
-                        if let Some(class_def) = self.registry.resolve_class(&s) {
-                            let class_def_clone = class_def.clone();
-                            let method = class_def_clone.methods.get(method_name.as_str())
-                                .ok_or_else(|| IshError::ExecutionError(format!(
-                                    "Method '{}' not found on class '{}'.", method_name, s
-                                )))?;
+                        // Check Native Stdlib Classes
+                        for provider in &self.stdlib_providers {
+                            if provider.name() == s {
+                                match provider.execute_method(&method_name, &eval_args, &mut self.gobbler) {
+                                    Ok(output_val) => {
+                                        self.last_exit_code = 0;
+                                        self.return_value = Some(output_val);
+                                        return Ok(true);
+                                    }
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                        }
 
-                            if !method.is_static {
+                        // Check if s is a class name (Static Method Call)
+                        let resolved = self.registry.resolve_class_method(&s, method_name.as_str())
+                            .map(|(c, m)| (c.clone(), m.clone()));
+
+                        if let Some((class_def_clone, method_clone)) = resolved {
+
+                            if !method_clone.is_static {
                                 return Err(IshError::ExecutionError(format!(
                                     "Cannot call instance method '{}' without an object instance.", method_name
                                 )));
                             }
 
                             // Check access specifier
-                            Registry::check_access(&method.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
-
-                            // Evaluate arguments
-                            let mut eval_args = Vec::new();
-                            for arg_node in args {
-                                eval_args.push(self.evaluate_node(arg_node, jobs)?);
-                            }
+                            Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
 
                             let mut evaluated_params = Vec::new();
                             let mut arg_idx = 0;
-                            for param in &method.params {
+                            for param in &method_clone.params {
                                 if param.is_variadic {
                                     let mut variadic_arr = Vec::new();
                                     while arg_idx < eval_args.len() {
@@ -1972,9 +1371,9 @@ impl Executor {
 
                             let prev_class = self.current_class.clone();
                             self.current_class = Some(class_def_clone.qualified_name.clone());
-
                             let mut success = true;
-                            for stmt in &method.body {
+                            let mut ret_val: Option<IshValue> = None;
+                            for stmt in &method_clone.body {
                                 success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
                                 if self.returning { break; }
                             }
@@ -2057,7 +1456,17 @@ impl Executor {
                                 self.return_value = Some(val);
                                 return Ok(true);
                             }
+                            crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                if property_name == "Length" {
+                                    self.return_value = Some(IshValue::Int(arr.len() as i32));
+                                    return Ok(true);
+                                }
+                            }
                             crate::core::gobbler::HeapObject::Map(m) => {
+                                if property_name == "Count" {
+                                    self.return_value = Some(IshValue::Int(m.len() as i32));
+                                    return Ok(true);
+                                }
                                 let val = m.get(property_name.as_str())
                                     .cloned()
                                     .unwrap_or(IshValue::Null);
@@ -2082,6 +1491,20 @@ impl Executor {
             }
             AstNodeKind::EnumDecl { .. } => Ok(true),
             AstNodeKind::WithImport { .. } => Ok(true),
+
+            AstNodeKind::IndexAccess { object, index } => {
+                let val = self.evaluate_node(node, jobs)?;
+                let output = val.to_string();
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(output.as_bytes());
+                } else if !output.is_empty() {
+                    print!("{}", output);
+                    let _ = std::io::stdout().flush();
+                }
+                Ok(true)
+            }
+
         }
     }
 }

@@ -1,19 +1,11 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenKind {
     Word(String),
-    Variable(String),
     StringLiteral(String),
-    Subshell(String),
+    InterpolatedStringLiteral(String),
 
     // Ish custom syntax
-    Pipe,           // |
     Colon,          // :
-    RedirectTo,     // to
-    RedirectFrom,   // from
-    AppendTo,       // append to
-    ReadDoc,        // read doc
-    MergeErr,       // merge err
-    DevNull,        // DevNull
     Then,           // then
     WhileAsync,     // while
     AndThen,        // and then
@@ -36,8 +28,11 @@ pub enum TokenKind {
     Else,
     For,
     Foreach,
-    Declare,
-    Let,
+    Var,
+    StringKeyword,
+    IntKeyword,
+    BoolKeyword,
+    FloatKeyword,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
@@ -45,6 +40,9 @@ pub enum TokenKind {
     Continue,
     Try,
     Catch,
+    Switch,
+    Case,
+    Default,
     
     // OOP Keywords
     Class,
@@ -141,7 +139,7 @@ impl Tokenizer {
                         TokenKind::OrElse
                     } else {
                         self.advance();
-                        TokenKind::Pipe
+                        TokenKind::Word("|".to_string())
                     }
                 }
                 '&' => {
@@ -229,28 +227,12 @@ impl Tokenizer {
                 }
                 '$' => {
                     self.advance();
-                    if self.position < self.input.len() && self.input[self.position] == '(' {
-                        self.advance();
-                        let mut depth = 1;
-                        let mut subshell_content = String::new();
-                        while self.position < self.input.len() {
-                            let c = self.input[self.position];
-                            if c == '(' {
-                                depth += 1;
-                            } else if c == ')' {
-                                depth -= 1;
-                                if depth == 0 {
-                                    self.advance();
-                                    break;
-                                }
-                            }
-                            subshell_content.push(c);
-                            self.advance();
-                        }
-                        TokenKind::Subshell(subshell_content)
+                    if self.position < self.input.len() && self.input[self.position] == '"' {
+                        // Interpolated string handling
+                        let str_val = self.read_string('"')?;
+                        TokenKind::InterpolatedStringLiteral(str_val)
                     } else {
-                        let var_name = self.read_word();
-                        TokenKind::Variable(var_name)
+                        return Err(crate::error::IshError::ParseError("Variables no longer use the $ prefix in Ish.".to_string()));
                     }
                 }
                 '"' | '\'' => {
@@ -264,87 +246,40 @@ impl Tokenizer {
                         continue;
                     }
 
-                    if word == "and" {
-                        self.skip_whitespace();
-                        let next_word = self.peek_word();
-                        if next_word == "then" {
-                            self.read_word();
-                            TokenKind::AndThen
-                        } else {
-                            TokenKind::Word(word)
-                        }
-                    } else if word == "or" {
-                        self.skip_whitespace();
-                        let next_word = self.peek_word();
-                        if next_word == "else" {
-                            self.read_word();
-                            TokenKind::OrElse
-                        } else {
-                            TokenKind::Word(word)
-                        }
-                    } else if word == "append" {
-                        self.skip_whitespace();
-                        let next_word = self.peek_word();
-                        if next_word == "to" {
-                            self.read_word();
-                            TokenKind::AppendTo
-                        } else {
-                            TokenKind::Word(word)
-                        }
-                    } else if word == "read" {
-                        self.skip_whitespace();
-                        let next_word = self.peek_word();
-                        if next_word == "doc" {
-                            self.read_word();
-                            TokenKind::ReadDoc
-                        } else {
-                            TokenKind::Word(word)
-                        }
-                    } else if word == "merge" {
-                        self.skip_whitespace();
-                        let next_word = self.peek_word();
-                        if next_word == "err" {
-                            self.read_word();
-                            TokenKind::MergeErr
-                        } else {
-                            TokenKind::Word(word)
-                        }
-                    } else {
-                        match word.as_str() {
-                            "to" => TokenKind::RedirectTo,
-                            "from" => TokenKind::RedirectFrom,
-                            "DevNull" => TokenKind::DevNull,
-                            "then" => TokenKind::Then,
-                            "while" => TokenKind::WhileAsync,
-                            "job" => TokenKind::Job,
-                            "if" => TokenKind::If,
-                            "elif" => TokenKind::Elif,
-                            "else" => TokenKind::Else,
-                            "for" => TokenKind::For,
-                            "foreach" => TokenKind::Foreach,
-                            "declare" => TokenKind::Declare,
-                            "let" => TokenKind::Let,
-                            "fn" | "func" => TokenKind::Function,
-                            "return" => TokenKind::Return,
-                            "break" => TokenKind::Break,
-                            "continue" => TokenKind::Continue,
-                            "try" => TokenKind::Try,
-                            "catch" => TokenKind::Catch,
-                            "class" => TokenKind::Class,
-                            "struct" => TokenKind::Struct,
-                            "namespace" => TokenKind::Namespace,
-                            "public" => TokenKind::Public,
-                            "private" => TokenKind::Private,
-                            "protected" => TokenKind::Protected,
-                            "internal" => TokenKind::Internal,
-                            "static" => TokenKind::Static,
-                            "new" => TokenKind::New,
-                            "with" => TokenKind::With,
-                            "enum" => TokenKind::Enum,
-                            "params" => TokenKind::Params,
-                            "List" => TokenKind::List,
-                            _ => TokenKind::Word(word),
-                        }
+                    match word.as_str() {
+                        "if" => TokenKind::If,
+                        "elif" => TokenKind::Elif,
+                        "else" => TokenKind::Else,
+                        "for" => TokenKind::For,
+                        "foreach" => TokenKind::Foreach,
+                        "var" => TokenKind::Var,
+                        "string" => TokenKind::StringKeyword,
+                        "int" => TokenKind::IntKeyword,
+                        "bool" => TokenKind::BoolKeyword,
+                        "float" => TokenKind::FloatKeyword,
+                        "fn" | "func" => TokenKind::Function,
+                        "return" => TokenKind::Return,
+                        "break" => TokenKind::Break,
+                        "continue" => TokenKind::Continue,
+                        "try" => TokenKind::Try,
+                        "catch" => TokenKind::Catch,
+                        "switch" => TokenKind::Switch,
+                        "case" => TokenKind::Case,
+                        "default" => TokenKind::Default,
+                        "class" => TokenKind::Class,
+                        "struct" => TokenKind::Struct,
+                        "namespace" => TokenKind::Namespace,
+                        "public" => TokenKind::Public,
+                        "private" => TokenKind::Private,
+                        "protected" => TokenKind::Protected,
+                        "internal" => TokenKind::Internal,
+                        "static" => TokenKind::Static,
+                        "new" => TokenKind::New,
+                        "with" => TokenKind::With,
+                        "enum" => TokenKind::Enum,
+                        "params" => TokenKind::Params,
+                        "List" => TokenKind::List,
+                        _ => TokenKind::Word(word),
                     }
                 }
             };

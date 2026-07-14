@@ -2,9 +2,9 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process;
-use std::io::Write;
 
 use crate::core::ast::IshValue;
+use crate::core::io::{StdinStream, StdoutStream, StderrStream, InputStream, OutputStream};
 use std::collections::HashMap;
 
 /// Tries to execute an internal command.
@@ -149,36 +149,23 @@ pub fn execute_internal(program: &str, args: &[String], gobbler: &mut crate::cor
         }
         "input" => {
             if !args.is_empty() {
-                eprint!("{} ", args.join(" "));
-                let _ = std::io::stderr().flush();
+                let mut stderr = StderrStream::new();
+                stderr.write(&args.join(" ")).map_err(|e| format!("input error: {}", e))?;
+                stderr.write(" ").map_err(|e| format!("input error: {}", e))?;
             }
-            let mut input = String::new();
-            if std::io::stdin().read_line(&mut input).is_err() {
-                return Err("Failed to read input".to_string());
-            }
-            Ok(Some(IshValue::String(input.trim_end_matches('\n').trim_end_matches('\r').to_string())))
+            let mut stdin = StdinStream::new();
+            let line = stdin.read_line().map_err(|e| format!("input error: {}", e))?;
+            Ok(Some(IshValue::String(line)))
         }
         "inputkey" => {
-            use crossterm::event::{read, Event, KeyCode};
-            use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
             if !args.is_empty() {
-                eprint!("{} ", args.join(" "));
-                let _ = std::io::stderr().flush();
+                let mut stderr = StderrStream::new();
+                stderr.write(&args.join(" ")).map_err(|e| format!("inputkey error: {}", e))?;
+                stderr.write(" ").map_err(|e| format!("inputkey error: {}", e))?;
             }
-            let _ = enable_raw_mode();
-            let result = match read() {
-                Ok(Event::Key(key_event)) => {
-                    let _ = std::io::stdout().flush();
-                    match key_event.code {
-                        KeyCode::Char(c) => Ok(Some(IshValue::String(c.to_string()))),
-                        KeyCode::Enter => Ok(Some(IshValue::String("\n".to_string()))),
-                        _ => Ok(Some(IshValue::String(String::from(" ")))),
-                    }
-                }
-                _ => Ok(Some(IshValue::String(String::from(" ")))),
-            };
-            let _ = disable_raw_mode();
-            result
+            let mut stdin = StdinStream::new();
+            let key = stdin.read_key().map_err(|e| format!("inputkey error: {}", e))?;
+            Ok(Some(IshValue::String(key.to_string())))
         }
         "irm" => {
             if args.is_empty() {

@@ -4,11 +4,13 @@ use std::process::ExitCode;
 pub mod error;
 pub mod core;
 pub mod managers;
-pub mod ui;
+
+#[cfg(windows)]
+use core::io::platform::windows::enable_virtual_terminal_processing;
 
 #[derive(Parser, Debug)]
 #[command(name = "ish")]
-#[command(about = "Intelli-Shell: A cross-platform system shell with built-in intellisense.", long_about = None)]
+#[command(about = "Ish Programming Language", long_about = None)]
 struct Args {
     /// Execute a command and exit
     #[arg(short, long)]
@@ -16,14 +18,6 @@ struct Args {
 
     /// Path to a script file to execute
     script: Option<String>,
-
-    /// Login shell (ignored, for chsh/Termux compatibility)
-    #[arg(short, long)]
-    login: bool,
-
-    /// Interactive shell (ignored, for compatibility)
-    #[arg(short, long)]
-    interactive: bool,
 
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     script_args: Vec<String>,
@@ -39,23 +33,15 @@ fn execute_headless_command(cmd: &str, executor: &mut core::executor::Executor, 
     let mut linter = core::linter::Linter::new();
     linter.lint(&ast)?;
     
-
-
     executor.execute(&ast, jobs)?;
     Ok(())
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    let _ = enable_virtual_terminal_processing();
+    
     let args = Args::parse();
-
-    // Initialize configuration
-    let config_manager = match managers::config::ConfigManager::new() {
-        Ok(manager) => manager,
-        Err(e) => {
-            eprintln!("Failed to load configuration: {}", e);
-            return ExitCode::FAILURE;
-        }
-    };
 
     if let Some(cmd) = args.command {
         let mut executor = core::executor::Executor::new(vec![]);
@@ -83,12 +69,6 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Launch Shell REPL
-    let mut app = ui::App::new();
-    if let Err(e) = app.run(&config_manager) {
-        eprintln!("Error running shell: {}", e);
-        return ExitCode::FAILURE;
-    }
-
-    ExitCode::SUCCESS
+    eprintln!("Usage: ish <script.ish> [args...]");
+    ExitCode::FAILURE
 }

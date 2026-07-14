@@ -1,0 +1,18 @@
+public static class Program {
+    public static func Main(params string[] args) {
+        # Test basic string interpolation with simple variable
+        let name = "Ish";
+        CommandLine.OutputLine($"Welcome to {name}");
+        
+        # Test string interpolation with expressions
+        let a = 5;
+        let b = 10;
+        CommandLine.OutputLine($"Sum: {a + b}");
+        
+        # Test string interpolation with boolean expressions
+        let x = 5;
+        CommandLine.OutputLine($"Greater than 3: {x > 3}");
+        
+        return 0;
+    }
+}

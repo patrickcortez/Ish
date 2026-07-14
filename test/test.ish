@@ -1,9 +1,20 @@
 public static class Program {
     public static func Main(params let[] args) {
-        # Ish script test
-        out "Hello from Ish headless script execution!"
-        show
-        
-        return 0
+        let time = time_unix
+        out $time
+
+        let arr = ["hello", "world"]
+        let j = str_join $arr ", "
+        out $j
+
+        let splitted = str_split $j ", "
+        out $splitted
+
+        let fslist = fs_list "."
+        out $fslist
+
+        let d = time_now
+        let formatted = time_format $d "%Y-%m-%d"
+        out $formatted
     }
 }

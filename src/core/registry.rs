@@ -13,6 +13,7 @@ pub struct ClassDef {
     pub fields: HashMap<String, FieldDef>,
     pub constructor: Option<(AccessSpecifier, Vec<crate::core::ast::Param>, Vec<AstNode>)>,
     pub destructor: Option<Vec<AstNode>>,
+    pub base_class: Option<String>,
 }
 
 /// Represents a registered struct definition in the Ish OOP system.
@@ -76,15 +77,17 @@ impl Registry {
 
     /// Returns the current fully-qualified namespace prefix (e.g. "Ns1::Ns2").
     fn current_namespace(&self) -> String {
-        self.namespace_stack.join("::")
+        let parts: Vec<String> = self.namespace_stack.iter().filter(|s| !s.is_empty()).cloned().collect();
+        parts.join("::")
     }
 
     /// Builds a fully-qualified name by prepending the current namespace.
     fn qualify_name(&self, name: &str) -> String {
-        if self.namespace_stack.is_empty() {
+        let ns = self.current_namespace();
+        if ns.is_empty() {
             name.to_string()
         } else {
-            format!("{}::{}", self.current_namespace(), name)
+            format!("{}::{}", ns, name)
         }
     }
 
@@ -92,10 +95,6 @@ impl Registry {
     /// This does NOT execute any code — it only populates the registry.
     pub fn register_declarations(&mut self, node: &AstNode) -> Result<(), IshError> {
         match &node.kind {
-            AstNodeKind::Sequential(left, right) => {
-                self.register_declarations(left)?;
-                self.register_declarations(right)?;
-            }
             AstNodeKind::NamespaceDecl { name, body } => {
                 self.namespace_stack.push(name.clone());
                 for stmt in body {
@@ -103,7 +102,7 @@ impl Registry {
                 }
                 self.namespace_stack.pop();
             }
-            AstNodeKind::ClassDecl { name, access, is_static, methods, fields, constructor, destructor } => {
+            AstNodeKind::ClassDecl { name, base_class, access, is_static, methods, fields, constructor, destructor } => {
                 let qualified_name = self.qualify_name(name);
                 let mut method_map = HashMap::new();
                 let mut field_map = HashMap::new();
@@ -139,6 +138,7 @@ impl Registry {
                     fields: field_map,
                     constructor: constructor.clone(),
                     destructor: destructor.clone(),
+                    base_class: base_class.clone(),
                 });
             }
             AstNodeKind::StructDecl { name, access, fields, constructor, destructor } => {
@@ -238,6 +238,27 @@ impl Registry {
         None
     }
 
+    /// Resolves a method on a class, walking up the inheritance chain if necessary.
+    /// Returns the ClassDef where the method was found, and the MethodDef itself.
+    pub fn resolve_class_method<'a>(&'a self, start_class: &str, method_name: &str) -> Option<(&'a ClassDef, &'a MethodDef)> {
+        let mut current_class_name = start_class.to_string();
+        loop {
+            if let Some(class_def) = self.resolve_class(&current_class_name) {
+                if let Some(method) = class_def.methods.get(method_name) {
+                    return Some((class_def, method));
+                }
+                if let Some(ref base) = class_def.base_class {
+                    current_class_name = base.clone();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
     /// Look up a struct by name, trying both bare name and qualified name.
     pub fn resolve_struct(&self, name: &str) -> Option<&StructDef> {
         if let Some(s) = self.structs.get(name) {
@@ -279,21 +300,22 @@ impl Registry {
                             "Entry point method 'Main' must be declared as 'public'.".to_string()
                         ));
                     }
-                    if !main_method.params.last().map_or(false, |p| p.is_variadic) {
+
+                    if !main_method.params.last().map_or(false, |p| p.is_variadic && p.type_specifier.as_deref() == Some("string[]")) {
                         return Err(IshError::ParseError(
-                            "Entry point method 'Main' must have the 'params let[] args' signature.".to_string()
+                            "Entry point method 'Main' must have the 'params string[] args' signature.".to_string()
                         ));
                     }
                     return Ok(qn.clone());
                 } else {
                     return Err(IshError::ParseError(format!(
-                        "Entry point class '{}' must contain a 'public static func Main(params let[] args)' method.", qn
+                        "Entry point class '{}' must contain a 'public static func Main(params string[] args)' method.", qn
                     )));
                 }
             }
         }
         Err(IshError::ParseError(
-            "No entry point found. Scripts must contain a 'public static class Program' with a 'public static func Main(params let[] args)' method.".to_string()
+            "No entry point found. Scripts must contain a 'public static class Program' with a 'public static func Main(params string[] args)' method.".to_string()
         ))
     }
 

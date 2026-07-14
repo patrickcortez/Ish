@@ -1,0 +1,20 @@
+public static class Program {
+    public static func Main(params string[] args) {
+        var p = ExtProc.Start("cmd.exe", ["/c", "echo Hello World"]);
+        var output = p.StandardOutput;
+        var clean = Str.Trim(output);
+        CommandLine.OutputLine(clean);
+
+        if (args.Length > 0) {
+            CommandLine.OutputLine(args[0]);
+        }
+        CommandLine.OutputLine(args.Length);
+
+        var lines = FS.ReadAllLines("tests/test-execution.ish");
+        var len = lines.Length;
+        CommandLine.OutputLine(len);
+
+        var upper = Str.ToUpper("ishan");
+        CommandLine.OutputLine(upper);
+    }
+}

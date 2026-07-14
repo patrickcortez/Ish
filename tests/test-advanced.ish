@@ -1,0 +1,38 @@
+public static class BaseClass {
+    public static func Greet(string name) {
+        CommandLine.OutputLine($"Hello, {name} from BaseClass!");
+    }
+}
+
+public static class DerivedClass : BaseClass {
+    public static func RunGenerics(List<string> items) {
+        CommandLine.OutputLine("Running generics test with list.");
+    }
+    
+    public static func TestSwitch(int value) {
+        switch (value) {
+            case 1:
+                CommandLine.OutputLine("Value is ONE");
+            case 2:
+                CommandLine.OutputLine("Value is TWO");
+            default:
+                CommandLine.OutputLine($"Value is something else: {value}");
+        }
+    }
+    
+    public static func TestInterpolation(int a, int b) {
+        CommandLine.OutputLine($"Sum: {a + b}");
+        CommandLine.OutputLine($"Product: {a * b}");
+        CommandLine.OutputLine($"Greater: {a > b}");
+    }
+}
+
+public static class Program {
+    public static func Main(params string[] args) {
+        DerivedClass.Greet("Cortez");
+        DerivedClass.RunGenerics(new List<string>());
+        DerivedClass.TestSwitch(1);
+        DerivedClass.TestSwitch(5);
+        DerivedClass.TestInterpolation(5, 10);
+    }
+}

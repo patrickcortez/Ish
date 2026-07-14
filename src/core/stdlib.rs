@@ -1,418 +1,413 @@
 use crate::error::IshError;
+use crate::core::ast::IshValue;
+use crate::core::io::{StdinStream, StdoutStream, StderrStream, InputStream, OutputStream};
+use crate::core::io::color::{Color, ColorManager};
 use std::io::Write;
+use std::sync::{Mutex, OnceLock};
 
-/// A trait for providing Standard Library commands to the Executor
 pub trait StdlibProvider: Send + Sync {
     fn name(&self) -> &'static str;
-    fn handles_command(&self, cmd: &str) -> bool;
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError>;
+    fn handles_method(&self, method: &str) -> bool;
+    fn execute_method(&self, method: &str, args: &[IshValue], gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError>;
+}
+
+fn as_string(v: &IshValue) -> String {
+    match v {
+        IshValue::String(s) => s.clone(),
+        IshValue::Int(i) => i.to_string(),
+        IshValue::Float(f) => f.to_string(),
+        IshValue::Bool(b) => b.to_string(),
+        IshValue::Null => "null".to_string(),
+        IshValue::Reference(id) => format!("<Reference {}>", id),
+    }
+}
+
+pub struct IshCommandLine;
+static COLOR_MANAGER: OnceLock<Mutex<ColorManager>> = OnceLock::new();
+
+fn get_color_manager() -> &'static Mutex<ColorManager> {
+    COLOR_MANAGER.get_or_init(|| Mutex::new(ColorManager::new()))
+}
+
+impl StdlibProvider for IshCommandLine {
+    fn name(&self) -> &'static str { "CommandLine" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], _gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "OutputLine" => {
+                let mut stdout = StdoutStream::new();
+                if args.is_empty() {
+                    stdout.write_line("").map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                } else {
+                    stdout.write_line(&as_string(&args[0])).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                }
+                Ok(IshValue::Null)
+            }
+            "Output" => {
+                if !args.is_empty() {
+                    let mut stdout = StdoutStream::new();
+                    stdout.write(&as_string(&args[0])).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                }
+                Ok(IshValue::Null)
+            }
+            "Input" => {
+                let mut stdin = StdinStream::new();
+                let line = stdin.read_line().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::String(line))
+            }
+            "Read" => {
+                let mut stdin = StdinStream::new();
+                let key = stdin.read_key().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::String(key.to_string()))
+            }
+            "Out" => Ok(IshValue::String("<StdoutStream>".to_string())),
+            "Error" => Ok(IshValue::String("<StderrStream>".to_string())),
+            "In" => Ok(IshValue::String("<StdinStream>".to_string())),
+            "ForeColor" => {
+                if args.is_empty() {
+                    return Err(IshError::ExecutionError("ForeColor requires a color argument".into()));
+                }
+                let color_str = as_string(&args[0]);
+                let color = if color_str.starts_with('#') || color_str.len() == 6 {
+                    Color::from_hex(&color_str).map_err(|e| IshError::ExecutionError(e.to_string()))?
+                } else {
+                    match color_str.to_lowercase().as_str() {
+                        "black" => Color::Black,
+                        "red" => Color::Red,
+                        "green" => Color::Green,
+                        "yellow" => Color::Yellow,
+                        "blue" => Color::Blue,
+                        "magenta" => Color::Magenta,
+                        "cyan" => Color::Cyan,
+                        "white" => Color::White,
+                        _ => return Err(IshError::ExecutionError(format!("Unknown color: {}", color_str))),
+                    }
+                };
+                let mut cm = get_color_manager().lock().unwrap();
+                cm.set_foreground(color).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::Null)
+            }
+            "BackColor" => {
+                if args.is_empty() {
+                    return Err(IshError::ExecutionError("BackColor requires a color argument".into()));
+                }
+                let color_str = as_string(&args[0]);
+                let color = if color_str.starts_with('#') || color_str.len() == 6 {
+                    Color::from_hex(&color_str).map_err(|e| IshError::ExecutionError(e.to_string()))?
+                } else {
+                    match color_str.to_lowercase().as_str() {
+                        "black" => Color::Black,
+                        "red" => Color::Red,
+                        "green" => Color::Green,
+                        "yellow" => Color::Yellow,
+                        "blue" => Color::Blue,
+                        "magenta" => Color::Magenta,
+                        "cyan" => Color::Cyan,
+                        "white" => Color::White,
+                        _ => return Err(IshError::ExecutionError(format!("Unknown color: {}", color_str))),
+                    }
+                };
+                let mut cm = get_color_manager().lock().unwrap();
+                cm.set_background(color).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::Null)
+            }
+            "ResetColor" => {
+                let mut cm = get_color_manager().lock().unwrap();
+                cm.reset().map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::Null)
+            }
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in CommandLine", method)))
+        }
+    }
 }
 
 pub struct IshStr;
 
 impl StdlibProvider for IshStr {
-    fn name(&self) -> &'static str {
-        "IshStr"
-    }
-
-    fn handles_command(&self, cmd: &str) -> bool {
-        cmd.starts_with("str_")
-    }
-
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
-        match cmd {
-            "str_tolower" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_tolower requires 1 argument".to_string())); }
-                Ok(args[0].to_lowercase())
+    fn name(&self) -> &'static str { "Str" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "ToLower" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.ToLower requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).to_lowercase()))
             }
-            "str_toupper" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_toupper requires 1 argument".to_string())); }
-                Ok(args[0].to_uppercase())
+            "ToUpper" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.ToUpper requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).to_uppercase()))
             }
-            "str_reverse" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_reverse requires 1 argument".to_string())); }
-                Ok(args[0].chars().rev().collect())
+            "Reverse" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.Reverse requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).chars().rev().collect()))
             }
-            "str_trim" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_trim requires 1 argument".to_string())); }
-                Ok(args[0].trim().to_string())
+            "Trim" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.Trim requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).trim().to_string()))
             }
-            "str_trimstart" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_trimstart requires 1 argument".to_string())); }
-                Ok(args[0].trim_start().to_string())
+            "TrimStart" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.TrimStart requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).trim_start().to_string()))
             }
-            "str_trimend" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_trimend requires 1 argument".to_string())); }
-                Ok(args[0].trim_end().to_string())
+            "TrimEnd" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.TrimEnd requires 1 argument".into())); }
+                Ok(IshValue::String(as_string(&args[0]).trim_end().to_string()))
             }
-            "str_len" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("str_len requires 1 argument".to_string())); }
-                Ok(args[0].len().to_string())
+            "Length" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Str.Length requires 1 argument".into())); }
+                Ok(IshValue::Int(as_string(&args[0]).len() as i32))
             }
-            "str_contains" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("str_contains requires 2 arguments: <string> <substring>".to_string())); }
-                Ok(args[0].contains(&args[1]).to_string())
+            "Contains" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Str.Contains requires 2 args".into())); }
+                Ok(IshValue::Bool(as_string(&args[0]).contains(&as_string(&args[1]))))
             }
-            "str_find" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("str_find requires 2 arguments: <string> <substring>".to_string())); }
-                match args[0].find(&args[1]) {
-                    Some(idx) => Ok(idx.to_string()),
-                    None => Ok("-1".to_string())
+            "IndexOf" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Str.IndexOf requires 2 args".into())); }
+                match as_string(&args[0]).find(&as_string(&args[1])) {
+                    Some(idx) => Ok(IshValue::Int(idx as i32)),
+                    None => Ok(IshValue::Int(-1))
                 }
             }
-            "str_substr" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("str_substr requires at least 2 arguments: <string> <start> [end]".to_string())); }
-                let start = args[1].parse::<usize>().map_err(|_| IshError::ExecutionError("Invalid start index".to_string()))?;
-                let mut end = args[0].len();
+            "Substring" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Str.Substring requires >= 2 args".into())); }
+                let s = as_string(&args[0]);
+                let start = match &args[1] {
+                    IshValue::Int(i) => *i as usize,
+                    _ => return Err(IshError::ExecutionError("Substring start must be int".into()))
+                };
+                let mut end = s.len();
                 if args.len() > 2 {
-                    end = args[2].parse::<usize>().map_err(|_| IshError::ExecutionError("Invalid end index".to_string()))?;
+                    if let IshValue::Int(i) = &args[2] { end = *i as usize; }
                 }
-                if start > args[0].len() || end > args[0].len() || start > end {
-                    return Err(IshError::ExecutionError("Invalid substring indices".to_string()));
+                if start > s.len() || end > s.len() || start > end {
+                    return Err(IshError::ExecutionError("Invalid substring indices".into()));
                 }
-                Ok(args[0][start..end].to_string())
+                Ok(IshValue::String(s[start..end].to_string()))
             }
-            "str_join" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("str_join requires an array and a separator".to_string())); }
-                let sep = &args[args.len() - 1];
-                let mut arr_str = args[0].clone();
-                if arr_str.starts_with('[') && arr_str.ends_with(']') {
-                    arr_str = arr_str[1..arr_str.len() - 1].to_string();
+            "Join" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Str.Join requires array and sep".into())); }
+                let sep = as_string(&args[1]);
+                if let IshValue::Reference(id) = &args[0] {
+                    if let Some(crate::core::gobbler::HeapObject::Array(arr)) = gobbler.get(*id) {
+                        let strs: Vec<String> = arr.iter().map(|v| as_string(v)).collect();
+                        return Ok(IshValue::String(strs.join(&sep)));
+                    }
                 }
-                let items: Vec<&str> = arr_str.split(", ").collect();
-                Ok(items.join(sep))
+                Err(IshError::ExecutionError("First argument to Join must be an array reference".into()))
             }
-            "str_split" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("str_split requires 2 arguments: <string> <separator>".to_string())); }
-                let parts: Vec<&str> = args[0].split(&args[1]).collect();
-                // We return parts joined by space to be used as array in Ish
-                Ok(parts.join(" "))
+            "Split" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Str.Split requires string and sep".into())); }
+                let s = as_string(&args[0]);
+                let sep = as_string(&args[1]);
+                let parts: Vec<String> = s.split(&sep).map(|x| x.to_string()).collect();
+                let ishs: Vec<IshValue> = parts.into_iter().map(IshValue::String).collect();
+                let ref_id = gobbler.allocate(crate::core::gobbler::HeapObject::Array(ishs));
+                Ok(IshValue::Reference(ref_id))
             }
-            "str_replace" => {
-                if args.len() < 3 { return Err(IshError::ExecutionError("str_replace requires 3 arguments: <string> <old> <new>".to_string())); }
-                Ok(args[0].replace(&args[1], &args[2]))
+            "Replace" => {
+                if args.len() < 3 { return Err(IshError::ExecutionError("Str.Replace requires 3 args".into())); }
+                Ok(IshValue::String(as_string(&args[0]).replace(&as_string(&args[1]), &as_string(&args[2]))))
             }
-            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshStr", cmd)))
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in Str", method)))
         }
     }
 }
 
 pub struct IshFS;
-
 impl StdlibProvider for IshFS {
-    fn name(&self) -> &'static str {
-        "IshFS"
-    }
-
-    fn handles_command(&self, cmd: &str) -> bool {
-        cmd.starts_with("fs_")
-    }
-
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
-        match cmd {
-            "fs_exists" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_exists requires 1 argument".to_string())); }
-                Ok(std::path::Path::new(&args[0]).exists().to_string())
+    fn name(&self) -> &'static str { "FS" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "Exists" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("FS.Exists requires 1 arg".into())); }
+                Ok(IshValue::Bool(std::path::Path::new(&as_string(&args[0])).exists()))
             }
-            "fs_readfile" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_readfile requires 1 argument".to_string())); }
-                let content = std::fs::read_to_string(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                // Return as an Ish Array representation of lines
-                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-                Ok(format!("[{}]", lines.join(", ")))
+            "ReadAllLines" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("FS.ReadAllLines requires 1 arg".into())); }
+                let content = std::fs::read_to_string(&as_string(&args[0])).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                let lines: Vec<IshValue> = content.lines().map(|l| IshValue::String(l.to_string())).collect();
+                let ref_id = gobbler.allocate(crate::core::gobbler::HeapObject::Array(lines));
+                Ok(IshValue::Reference(ref_id))
             }
-            "fs_writefile" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("fs_writefile requires <path> <data> [append]".to_string())); }
-                let mut append = true;
-                if args.len() > 2 {
-                    append = args[2] == "true";
-                }
-                
-                let mut data_str = args[1].clone();
-                if data_str.starts_with('[') && data_str.ends_with(']') {
-                    data_str = data_str[1..data_str.len() - 1].to_string();
-                }
-                
-                let mut file = std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&args[0])
+            "ReadAllText" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("FS.ReadAllText requires 1 arg".into())); }
+                let content = std::fs::read_to_string(&as_string(&args[0])).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::String(content))
+            }
+            "WriteAllText" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("FS.WriteAllText requires <path> <data> [append]".into())); }
+                let append = if args.len() > 2 { matches!(&args[2], IshValue::Bool(true)) } else { false };
+                let mut file = std::fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(&as_string(&args[0]))
                     .map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                file.write_all(data_str.as_bytes()).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
+                file.write_all(as_string(&args[1]).as_bytes()).map_err(|e| IshError::ExecutionError(e.to_string()))?;
+                Ok(IshValue::Bool(true))
             }
-            "fs_createfile" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_createfile requires 1 argument".to_string())); }
-                std::fs::File::create(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
-            }
-            "fs_deletefile" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_deletefile requires 1 argument".to_string())); }
-                std::fs::remove_file(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
-            }
-            "fs_createdir" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_createdir requires 1 argument".to_string())); }
-                std::fs::create_dir_all(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
-            }
-            "fs_deletedir" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_deletedir requires 1 argument".to_string())); }
-                std::fs::remove_dir_all(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
-            }
-            "fs_list" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("fs_list requires 1 argument".to_string())); }
+            "List" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("FS.List requires 1 arg".into())); }
                 let mut entries = Vec::new();
-                for entry in std::fs::read_dir(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))? {
-                    let entry = entry.map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                    entries.push(entry.file_name().to_string_lossy().to_string());
+                if let Ok(rd) = std::fs::read_dir(&as_string(&args[0])) {
+                    for entry in rd.flatten() {
+                        entries.push(IshValue::String(entry.path().display().to_string()));
+                    }
                 }
-                Ok(format!("[{}]", entries.join(", ")))
+                let ref_id = gobbler.allocate(crate::core::gobbler::HeapObject::Array(entries));
+                Ok(IshValue::Reference(ref_id))
             }
-            "fs_copy" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("fs_copy requires <source> <dest>".to_string())); }
-                std::fs::copy(&args[0], &args[1]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in FS", method)))
+        }
+    }
+}
+
+pub struct IshMath;
+impl StdlibProvider for IshMath {
+    fn name(&self) -> &'static str { "Math" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], _gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        let get_f = |v: &IshValue| -> f32 {
+            match v {
+                IshValue::Float(f) => *f,
+                IshValue::Int(i) => *i as f32,
+                IshValue::String(s) => s.parse().unwrap_or(0.0),
+                _ => 0.0
             }
-            "fs_move" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("fs_move requires <source> <dest>".to_string())); }
-                std::fs::rename(&args[0], &args[1]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok("".to_string())
+        };
+        match method {
+            "Abs" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Math.Abs requires 1 arg".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).abs()))
             }
-            "fs_getfileperm" | "fs_getdirperm" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("requires 1 argument".to_string())); }
-                let meta = std::fs::metadata(&args[0]).map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                let perms = meta.permissions();
-                if perms.readonly() {
-                    Ok("0444".to_string())
-                } else {
-                    Ok("0644".to_string()) // Simulating default rw-r--r--
-                }
+            "Ceiling" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Math.Ceiling requires 1 arg".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).ceil()))
             }
-            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshFS", cmd)))
+            "Floor" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Math.Floor requires 1 arg".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).floor()))
+            }
+            "Round" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Math.Round requires 1 arg".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).round()))
+            }
+            "Pow" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Math.Pow requires 2 args".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).powf(get_f(&args[1]))))
+            }
+            "Min" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Math.Min requires 2 args".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).min(get_f(&args[1]))))
+            }
+            "Max" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("Math.Max requires 2 args".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).max(get_f(&args[1]))))
+            }
+            "Sqrt" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Math.Sqrt requires 1 arg".into())); }
+                Ok(IshValue::Float(get_f(&args[0]).sqrt()))
+            }
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in Math", method)))
         }
     }
 }
 
 pub struct IshTime;
-
 impl StdlibProvider for IshTime {
-    fn name(&self) -> &'static str {
-        "IshTime"
-    }
-
-    fn handles_command(&self, cmd: &str) -> bool {
-        cmd.starts_with("time_")
-    }
-
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
-        match cmd {
-            "time_now" => {
-                Ok(chrono::Utc::now().to_rfc3339())
+    fn name(&self) -> &'static str { "Time" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], _gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "Now" => {
+                let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                Ok(IshValue::Int(s as i32))
             }
-            "time_unix" => {
-                Ok(chrono::Utc::now().timestamp().to_string())
+            "Unix" => {
+                let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                Ok(IshValue::Int(s as i32))
             }
-            "time_format" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("time_format requires <timestamp_or_rfc3339> <format>".to_string())); }
-                let dt = if let Ok(unix) = args[0].parse::<i64>() {
-                    chrono::DateTime::from_timestamp(unix, 0).ok_or_else(|| IshError::ExecutionError("Invalid unix timestamp".to_string()))?
-                } else {
-                    chrono::DateTime::parse_from_rfc3339(&args[0])
-                        .map_err(|e| IshError::ExecutionError(e.to_string()))?
-                        .with_timezone(&chrono::Utc)
-                };
-                Ok(dt.format(&args[1]).to_string())
+            "Format" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("Time.Format requires 1 arg".into())); }
+                Ok(IshValue::String(format!("Formatted: {}", as_string(&args[0]))))
             }
-            "time_parse" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("time_parse requires <time_string> <format>".to_string())); }
-                let dt = chrono::NaiveDateTime::parse_from_str(&args[0], &args[1])
-                    .map_err(|e| IshError::ExecutionError(e.to_string()))?;
-                Ok(dt.and_utc().timestamp().to_string())
-            }
-            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshTime", cmd)))
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in Time", method)))
         }
     }
 }
 
 pub struct IshNet;
-
 impl StdlibProvider for IshNet {
-    fn name(&self) -> &'static str {
-        "IshNet"
-    }
-
-    fn handles_command(&self, cmd: &str) -> bool {
-        cmd.starts_with("net_")
-    }
-
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
-        match cmd {
-            "net_isavailable" => {
-                use std::net::ToSocketAddrs;
-                if "1.1.1.1:53".to_socket_addrs().is_ok() || "8.8.8.8:53".to_socket_addrs().is_ok() {
-                    Ok("true".to_string())
-                } else {
-                    Ok("false".to_string())
-                }
-            }
-            "net_ssid" => {
-                if cfg!(target_os = "windows") {
-                    if let Ok(output) = std::process::Command::new("netsh").args(&["wlan", "show", "interfaces"]).output() {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        for line in stdout.lines() {
-                            if line.trim_start().starts_with("SSID") {
-                                let parts: Vec<&str> = line.split(':').collect();
-                                if parts.len() >= 2 {
-                                    return Ok(parts[1].trim().to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok("".to_string())
-            }
-            "net_ip" => {
-                if let Ok(output) = std::process::Command::new("curl").args(&["-s", "https://api.ipify.org"]).output() {
-                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                } else {
-                    Err(IshError::ExecutionError("Failed to fetch IP".to_string()))
-                }
-            }
-            "net_ping" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("net_ping requires 1 argument".to_string())); }
-                let host = &args[0];
-                let (prog, ping_args) = if cfg!(target_os = "windows") {
-                    ("ping", vec!["-n", "1", host])
-                } else {
-                    ("ping", vec!["-c", "1", host])
-                };
-                if let Ok(status) = std::process::Command::new(prog).args(&ping_args).status() {
-                    if status.success() {
-                        return Ok("true".to_string());
-                    }
-                }
-                Ok("false".to_string())
-            }
-            "net_resolve" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("net_resolve requires 1 argument".to_string())); }
-                use std::net::ToSocketAddrs;
-                let query = if args[0].contains(':') { args[0].clone() } else { format!("{}:80", args[0]) };
-                match query.to_socket_addrs() {
-                    Ok(mut addrs) => {
-                        if let Some(addr) = addrs.next() {
-                            Ok(addr.ip().to_string())
-                        } else {
-                            Err(IshError::ExecutionError("Could not resolve host".to_string()))
-                        }
-                    }
-                    Err(e) => Err(IshError::ExecutionError(e.to_string()))
-                }
-            }
-            "net_get" | "net_getsecure" => {
-                if args.is_empty() { return Err(IshError::ExecutionError(format!("{} requires 1 argument", cmd))); }
-                if let Ok(output) = std::process::Command::new("curl").args(&["-sL", &args[0]]).output() {
-                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                } else {
-                    Err(IshError::ExecutionError("Failed to run curl".to_string()))
-                }
-            }
-            "net_post" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("net_post requires <url> <data>".to_string())); }
-                if let Ok(output) = std::process::Command::new("curl").args(&["-sL", "-X", "POST", "-d", &args[1], &args[0]]).output() {
-                    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-                } else {
-                    Err(IshError::ExecutionError("Failed to run curl".to_string()))
-                }
-            }
-            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshNet", cmd)))
+    fn name(&self) -> &'static str { "Net" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, _args: &[IshValue], _gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "Get" => Ok(IshValue::String("Net.Get not implemented natively yet".into())),
+            "Post" => Ok(IshValue::String("Net.Post not implemented natively yet".into())),
+            "Download" => Ok(IshValue::Bool(false)),
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in Net", method)))
         }
     }
 }
 
 pub struct IshOS;
-
 impl StdlibProvider for IshOS {
-    fn name(&self) -> &'static str {
-        "IshOS"
+    fn name(&self) -> &'static str { "OS" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], _gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "GetEnv" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("OS.GetEnv requires 1 arg".into())); }
+                match std::env::var(as_string(&args[0])) {
+                    Ok(v) => Ok(IshValue::String(v)),
+                    Err(_) => Ok(IshValue::Null)
+                }
+            }
+            "SetEnv" => {
+                if args.len() < 2 { return Err(IshError::ExecutionError("OS.SetEnv requires 2 args".into())); }
+                unsafe { std::env::set_var(as_string(&args[0]), as_string(&args[1])); }
+                Ok(IshValue::Bool(true))
+            }
+            "Platform" => Ok(IshValue::String(std::env::consts::OS.to_string())),
+            "Arch" => Ok(IshValue::String(std::env::consts::ARCH.to_string())),
+            "Cwd" => Ok(IshValue::String(std::env::current_dir().unwrap_or_default().display().to_string())),
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in OS", method)))
+        }
     }
+}
 
-    fn handles_command(&self, cmd: &str) -> bool {
-        cmd.starts_with("os_")
-    }
-
-    fn execute(&self, cmd: &str, args: &[String]) -> Result<String, IshError> {
-        match cmd {
-            "os_hostname" => {
-                if let Ok(output) = std::process::Command::new("hostname").output() {
-                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                } else {
-                    Ok("".to_string())
-                }
-            }
-            "os_os" => Ok(std::env::consts::OS.to_string()),
-            "os_arch" => Ok(std::env::consts::ARCH.to_string()),
-            "os_platform" => Ok(std::env::consts::FAMILY.to_string()),
-            "os_version" => {
-                if cfg!(target_os = "windows") {
-                    if let Ok(output) = std::process::Command::new("cmd").args(&["/c", "ver"]).output() {
-                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        Ok("".to_string())
-                    }
-                } else {
-                    if let Ok(output) = std::process::Command::new("uname").arg("-r").output() {
-                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        Ok("".to_string())
+pub struct IshExtProc;
+impl StdlibProvider for IshExtProc {
+    fn name(&self) -> &'static str { "ExtProc" }
+    fn handles_method(&self, _method: &str) -> bool { true }
+    fn execute_method(&self, method: &str, args: &[IshValue], gobbler: &mut crate::core::gobbler::Gobbler) -> Result<IshValue, IshError> {
+        match method {
+            "Start" => {
+                if args.is_empty() { return Err(IshError::ExecutionError("ExtProc.Start requires <program> [args[]]".into())); }
+                let program = as_string(&args[0]);
+                let mut cmd = std::process::Command::new(program);
+                if args.len() > 1 {
+                    if let IshValue::Reference(id) = &args[1] {
+                        if let Some(crate::core::gobbler::HeapObject::Array(arr)) = gobbler.get(*id) {
+                            for a in arr {
+                                cmd.arg(as_string(a));
+                            }
+                        }
+                    } else if let IshValue::String(s) = &args[1] {
+                        cmd.arg(s); // Fallback if single string passed
                     }
                 }
+                
+                let output = cmd.output().map_err(|e| IshError::ExecutionError(format!("ExtProc.Start failed: {}", e)))?;
+                let mut map = std::collections::HashMap::new();
+                map.insert("ExitCode".to_string(), IshValue::Int(output.status.code().unwrap_or(-1) as i32));
+                map.insert("StandardOutput".to_string(), IshValue::String(String::from_utf8_lossy(&output.stdout).to_string()));
+                map.insert("StandardError".to_string(), IshValue::String(String::from_utf8_lossy(&output.stderr).to_string()));
+                
+                let ref_id = gobbler.allocate(crate::core::gobbler::HeapObject::Object {
+                    class_name: "ExtProcResult".to_string(),
+                    properties: map,
+                });
+                
+                Ok(IshValue::Reference(ref_id))
             }
-            "os_getenvvars" => {
-                let vars: Vec<String> = std::env::vars().map(|(k, v)| format!("{}={}", k, v)).collect();
-                Ok(format!("[{}]", vars.join(", ")))
-            }
-            "os_getenvvar" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("os_getenvvar requires 1 argument".to_string())); }
-                Ok(std::env::var(&args[0]).unwrap_or_default())
-            }
-            "os_setenvvar" => {
-                if args.len() < 2 { return Err(IshError::ExecutionError("os_setenvvar requires <name> <value>".to_string())); }
-                unsafe {
-                    std::env::set_var(&args[0], &args[1]);
-                }
-                Ok("".to_string())
-            }
-            "os_exit" => {
-                let code = if args.is_empty() { 0 } else { args[0].parse::<i32>().unwrap_or(0) };
-                std::process::exit(code);
-            }
-            "os_sleep" => {
-                if args.is_empty() { return Err(IshError::ExecutionError("os_sleep requires <ms>".to_string())); }
-                if let Ok(ms) = args[0].parse::<u64>() {
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
-                }
-                Ok("".to_string())
-            }
-            "os_clear" => {
-                print!("\x1B[2J\x1B[1;1H");
-                let _ = std::io::stdout().flush();
-                Ok("".to_string())
-            }
-            "os_users" => {
-                if cfg!(target_os = "windows") {
-                    if let Ok(output) = std::process::Command::new("net").arg("user").output() {
-                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        Ok("".to_string())
-                    }
-                } else {
-                    if let Ok(output) = std::process::Command::new("cut").args(&["-d:", "-f1", "/etc/passwd"]).output() {
-                        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        Ok("".to_string())
-                    }
-                }
-            }
-            _ => Err(IshError::ExecutionError(format!("Command {} not implemented in IshOS", cmd)))
+            _ => Err(IshError::ExecutionError(format!("Method {} not found in ExtProc", method)))
         }
     }
 }
