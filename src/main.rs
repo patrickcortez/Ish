@@ -6,7 +6,7 @@ pub mod core;
 pub mod managers;
 
 #[cfg(windows)]
-use core::io::platform::windows::enable_virtual_terminal_processing;
+use core::io::platform::enable_virtual_terminal_processing;
 
 #[derive(Parser, Debug)]
 #[command(name = "ish")]
