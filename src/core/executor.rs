@@ -146,8 +146,6 @@ impl Executor {
 
     fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
         // Shell-style variable expansion for legacy compatibility
-        // Supports: $((math)), $(subshell), $? (exit code), $0 (script name), $VAR (environment)
-        // This is separate from native Ish variable resolution (see evaluate_node -> Variable case)
         let mut result = String::new();
         let mut chars = s.chars().peekable();
         
@@ -368,8 +366,6 @@ impl Executor {
                 Ok(IshValue::String(result))
             }
             AstNodeKind::Variable(var_name) => {
-                // Native Ish variable resolution - searches through variable scopes
-                // This is separate from shell-style variable expansion (see resolve_var function)
                 let base_idx = *self.function_bases.last().unwrap_or(&0);
                 let mut search_scopes = vec![];
                 for i in (base_idx..self.variables.len()).rev() {
@@ -378,15 +374,83 @@ impl Executor {
                 if base_idx != 0 {
                     search_scopes.push(0);
                 }
-                for i in search_scopes {
-                    if let Some(val) = self.variables[i].get(var_name) {
+                for i in &search_scopes {
+                    if let Some(val) = self.variables[*i].get(var_name) {
                         return Ok(val.clone());
                     }
                 }
+
+                // Not found locally. Are we in a class Context? (Implicit member access)
+                if let Some(class_qn) = &self.current_class {
+                    if let Some(class_def) = self.registry.resolve_class(class_qn) {
+                        if let Some(field_def) = class_def.fields.get(var_name) {
+                            if field_def.is_static {
+                                let static_key = format!("{}::{}", class_def.qualified_name, var_name);
+                                if let Some(val) = self.static_variables.get(&static_key) {
+                                    return Ok(val.clone());
+                                }
+                                return Ok(IshValue::Null);
+                            } else {
+                                // Instance field: find "this" in scopes
+                                let mut this_id = None;
+                                for i in &search_scopes {
+                                    if let Some(IshValue::Reference(id)) = self.variables[*i].get("this") {
+                                        this_id = Some(*id);
+                                        break;
+                                    }
+                                }
+                                if let Some(id) = this_id {
+                                    if let Some(crate::core::gobbler::HeapObject::Object { properties, .. }) = self.gobbler.get(id) {
+                                        if let Some(val) = properties.get(var_name) {
+                                            return Ok(val.clone());
+                                        }
+                                        return Ok(IshValue::Null);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(struct_def) = self.registry.resolve_struct(class_qn) {
+                        if let Some(field_def) = struct_def.fields.get(var_name) {
+                            if field_def.is_static {
+                                let static_key = format!("{}::{}", struct_def.qualified_name, var_name);
+                                if let Some(val) = self.static_variables.get(&static_key) {
+                                    return Ok(val.clone());
+                                }
+                                return Ok(IshValue::Null);
+                            } else {
+                                let mut this_id = None;
+                                for i in &search_scopes {
+                                    if let Some(IshValue::Reference(id)) = self.variables[*i].get("this") {
+                                        this_id = Some(*id);
+                                        break;
+                                    }
+                                }
+                                if let Some(id) = this_id {
+                                    if let Some(crate::core::gobbler::HeapObject::Object { properties, .. }) = self.gobbler.get(id) {
+                                        if let Some(val) = properties.get(var_name) {
+                                            return Ok(val.clone());
+                                        }
+                                        return Ok(IshValue::Null);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check static access explicitly via ClassName::Field
+                if var_name.contains("::") {
+                    if let Some(val) = self.static_variables.get(var_name) {
+                        return Ok(val.clone());
+                    }
+                }
+
                 // Allow class names and stdlib providers to be used as string values
-                if self.registry.classes.contains_key(var_name) || var_name == "CommandLine" || var_name == "Math" || var_name == "Str" || var_name == "Time" || var_name == "Net" || var_name == "OS" || var_name == "ExtProc" || var_name == "FS" {
+                if self.registry.classes.contains_key(var_name) || self.registry.structs.contains_key(var_name) || self.registry.enums.contains_key(var_name) || var_name == "CommandLine" || var_name == "Math" || var_name == "Str" || var_name == "Time" || var_name == "Net" || var_name == "OS" || var_name == "ExtProc" || var_name == "FS" {
                     return Ok(IshValue::String(var_name.clone()));
                 }
+
                 Err(crate::error::IshError::ExecutionError(format!("Variable '{}' is not defined in this scope", var_name)))
             }
             AstNodeKind::IndexAccess { object, index } => {
@@ -412,6 +476,77 @@ impl Executor {
                     }
                 }
                 Err(IshError::ExecutionError(format!("TypeError: Cannot index into non-array/list type")))
+            }
+            AstNodeKind::PropertyAccess { object, property_name } => {
+                let obj_val = self.evaluate_node(object, jobs)?;
+                
+                if let IshValue::String(s) = &obj_val {
+                    // Check Enum
+                    if let Some(enum_def) = self.registry.enums.get(s) {
+                        if let Some(index) = enum_def.variants.iter().position(|v| v == property_name) {
+                            return Ok(IshValue::Int(index as i32));
+                        } else {
+                            return Err(IshError::ExecutionError(format!("Enum {} does not have variant {}", s, property_name)));
+                        }
+                    }
+
+                    // Check Static Class Field Access
+                    if let Some(class_def) = self.registry.resolve_class(s) {
+                        if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
+                            if field_def.is_static {
+                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                                let static_key = format!("{}::{}", class_def.qualified_name, property_name);
+                                return Ok(self.static_variables.get(&static_key).cloned().unwrap_or(IshValue::Null));
+                            } else {
+                                return Err(IshError::ExecutionError(format!("Cannot access instance field '{}' of '{}' statically", property_name, s)));
+                            }
+                        }
+                    }
+
+                    if let Some(struct_def) = self.registry.resolve_struct(s) {
+                        if let Some(field_def) = struct_def.fields.get(property_name.as_str()) {
+                            if field_def.is_static {
+                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &struct_def.qualified_name)?;
+                                let static_key = format!("{}::{}", struct_def.qualified_name, property_name);
+                                return Ok(self.static_variables.get(&static_key).cloned().unwrap_or(IshValue::Null));
+                            } else {
+                                return Err(IshError::ExecutionError(format!("Cannot access instance field '{}' of '{}' statically", property_name, s)));
+                            }
+                        }
+                    }
+                }
+
+                if let IshValue::Reference(id) = &obj_val {
+                    if let Some(heap_obj) = self.gobbler.get(*id) {
+                        match heap_obj {
+                            crate::core::gobbler::HeapObject::Object { class_name, properties } => {
+                                if let Some(class_def) = self.registry.resolve_class(class_name) {
+                                    if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
+                                        Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                                    }
+                                } else if let Some(struct_def) = self.registry.resolve_struct(class_name) {
+                                    if let Some(field_def) = struct_def.fields.get(property_name.as_str()) {
+                                        Registry::check_access(&field_def.access, self.current_class.as_deref(), &struct_def.qualified_name)?;
+                                    }
+                                }
+                                return Ok(properties.get(property_name.as_str()).cloned().unwrap_or(IshValue::Null));
+                            }
+                            crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                if property_name == "Length" {
+                                    return Ok(IshValue::Int(arr.len() as i32));
+                                }
+                            }
+                            crate::core::gobbler::HeapObject::Map(m) => {
+                                if property_name == "Count" {
+                                    return Ok(IshValue::Int(m.len() as i32));
+                                }
+                                return Ok(m.get(property_name.as_str()).cloned().unwrap_or(IshValue::Null));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(IshError::ExecutionError(format!("Cannot access property '{}' on non-object value '{}'.", property_name, obj_val.to_string())))
             }
             AstNodeKind::StringLiteral(s) => {
                 if (s.starts_with('$') || s == "this") && !s.contains(" ") && !s.contains("(") && !s.contains("{") {
@@ -450,7 +585,6 @@ impl Executor {
                 let left_val = self.evaluate_node(left, jobs)?;
                 let right_val = self.evaluate_node(right, jobs)?;
                 
-                // First handle math operations and string concatenation
                 match operator.as_str() {
                     "+" => {
                         return match (left_val, right_val) {
@@ -504,7 +638,7 @@ impl Executor {
                     "&&" => {
                         let l_bool = match left_val {
                             IshValue::Bool(b) => b,
-                            _ => true, // Truthy
+                            _ => true,
                         };
                         let r_bool = match right_val {
                             IshValue::Bool(b) => b,
@@ -523,10 +657,9 @@ impl Executor {
                         };
                         return Ok(IshValue::Bool(l_bool || r_bool));
                     }
-                    _ => {} // Handled below (comparisons)
+                    _ => {}
                 }
 
-                // Handle logical comparisons
                 let success = match (left_val, right_val) {
                     (IshValue::Int(l), IshValue::Int(r)) => match operator.as_str() {
                         "==" => l == r,
@@ -578,7 +711,7 @@ impl Executor {
                     "!" => {
                         match val {
                             IshValue::Bool(b) => Ok(IshValue::Bool(!b)),
-                            _ => Ok(IshValue::Bool(false)), // Non-bool negated to false typically, or invert truthiness
+                            _ => Ok(IshValue::Bool(false)),
                         }
                     }
                     "-" => {
@@ -621,6 +754,35 @@ impl Executor {
         // First pass: register all OOP declarations (namespaces, classes, structs)
         self.registry.register_declarations(ast)?;
 
+        // Initialize static variables before actual execution
+        let classes = self.registry.classes.clone();
+        for (class_qn, class_def) in &classes {
+            for (field_name, field_def) in &class_def.fields {
+                if field_def.is_static {
+                    let val = if let Some(default_node) = &field_def.default_value {
+                        self.evaluate_node(default_node, jobs)?
+                    } else {
+                        IshValue::Null
+                    };
+                    self.static_variables.insert(format!("{}::{}", class_qn, field_name), val);
+                }
+            }
+        }
+        
+        let structs = self.registry.structs.clone();
+        for (struct_qn, struct_def) in &structs {
+            for (field_name, field_def) in &struct_def.fields {
+                if field_def.is_static {
+                    let val = if let Some(default_node) = &field_def.default_value {
+                        self.evaluate_node(default_node, jobs)?
+                    } else {
+                        IshValue::Null
+                    };
+                    self.static_variables.insert(format!("{}::{}", struct_qn, field_name), val);
+                }
+            }
+        }
+
         // Enforce OOP requirement
         match self.registry.find_entry_point() {
             Ok(program_class_name) => {
@@ -638,7 +800,6 @@ impl Executor {
                         "Internal error: Main method disappeared after registration.".to_string()
                     ))?;
                     
-                // Check access and static
                 if !main_method.is_static {
                     return Err(IshError::ExecutionError("Main method must be static.".to_string()));
                 }
@@ -791,15 +952,41 @@ impl Executor {
                         if let Some(id) = obj_id {
                             if let Some(heap_obj) = self.gobbler.get_mut(id) {
                                 match heap_obj {
-                                    crate::core::gobbler::HeapObject::Map(m) | crate::core::gobbler::HeapObject::Object { properties: m, .. } => {
+                                    crate::core::gobbler::HeapObject::Map(m) => {
                                         m.insert(prop_name.to_string(), val.clone());
+                                        return Ok(true);
+                                    }
+                                    crate::core::gobbler::HeapObject::Object { class_name, properties } => {
+                                        if let Some(class_def) = self.registry.resolve_class(class_name) {
+                                            if let Some(field_def) = class_def.fields.get(prop_name) {
+                                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                                            }
+                                        } else if let Some(struct_def) = self.registry.resolve_struct(class_name) {
+                                            if let Some(field_def) = struct_def.fields.get(prop_name) {
+                                                Registry::check_access(&field_def.access, self.current_class.as_deref(), &struct_def.qualified_name)?;
+                                            }
+                                        }
+                                        properties.insert(prop_name.to_string(), val.clone());
                                         return Ok(true);
                                     }
                                     _ => return Err(IshError::ExecutionError(format!("Cannot assign property on non-object '{}'", obj_name))),
                                 }
                             }
                         } else {
-                            return Err(IshError::ExecutionError(format!("Object '{}' not found", obj_name)));
+                            if let Some(class_def) = self.registry.resolve_class(obj_name) {
+                                if let Some(field_def) = class_def.fields.get(prop_name) {
+                                    if field_def.is_static {
+                                        Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
+                                        let static_key = format!("{}::{}", class_def.qualified_name, prop_name);
+                                        self.static_variables.insert(static_key, val.clone());
+                                        return Ok(true);
+                                    } else {
+                                        return Err(IshError::ExecutionError(format!("Cannot access instance field '{}' of '{}' statically", prop_name, obj_name)));
+                                    }
+                                }
+                            }
+                            
+                            return Err(IshError::ExecutionError(format!("Object or class '{}' not found", obj_name)));
                         }
                     }
 
@@ -811,6 +998,57 @@ impl Executor {
                             break;
                         }
                     }
+                    
+                    if !found {
+                        if let Some(class_qn) = &self.current_class {
+                            let mut is_member = false;
+                            let mut is_static = false;
+                            
+                            if let Some(class_def) = self.registry.resolve_class(class_qn) {
+                                if let Some(field_def) = class_def.fields.get(variable) {
+                                    is_member = true;
+                                    is_static = field_def.is_static;
+                                }
+                            } else if let Some(struct_def) = self.registry.resolve_struct(class_qn) {
+                                if let Some(field_def) = struct_def.fields.get(variable) {
+                                    is_member = true;
+                                    is_static = field_def.is_static;
+                                }
+                            }
+                            
+                            if is_member {
+                                if is_static {
+                                    let static_key = format!("{}::{}", class_qn, variable);
+                                    self.static_variables.insert(static_key, val.clone());
+                                    found = true;
+                                } else {
+                                    let mut this_id = None;
+                                    for scope in self.variables.iter().rev() {
+                                        if let Some(IshValue::Reference(id)) = scope.get("this") {
+                                            this_id = Some(*id);
+                                            break;
+                                        }
+                                    }
+                                    if let Some(id) = this_id {
+                                        if let Some(crate::core::gobbler::HeapObject::Object { properties, .. }) = self.gobbler.get_mut(id) {
+                                            properties.insert(variable.clone(), val.clone());
+                                            found = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !found {
+                        if variable.contains("::") {
+                            if self.static_variables.contains_key(variable) {
+                                self.static_variables.insert(variable.clone(), val.clone());
+                                found = true;
+                            }
+                        }
+                    }
+
                     if !found {
                         return Err(IshError::ExecutionError(format!("Variable '{}' is not declared. Use 'declare {} = ...' to declare it.", variable, variable)));
                     }
@@ -975,6 +1213,17 @@ impl Executor {
                 self.continuing = true;
                 Ok(true)
             }
+            AstNodeKind::FieldDecl { name, default_value, .. } => {
+                let val = if let Some(def) = default_value {
+                    self.evaluate_node(def, jobs)?
+                } else {
+                    IshValue::Null
+                };
+                if let Some(scope) = self.variables.last_mut() {
+                    scope.insert(name.clone(), val);
+                }
+                Ok(true)
+            }
             AstNodeKind::Function { name, .. } => {
                 self.functions.insert(name.clone(), node.clone());
                 Ok(true)
@@ -992,6 +1241,19 @@ impl Executor {
                     print!("{}", output);
                     let _ = std::io::stdout().flush();
                 }
+                Ok(true)
+            }
+            AstNodeKind::PropertyAccess { .. } | AstNodeKind::IndexAccess { .. } => {
+                let val = self.evaluate_node(node, jobs)?;
+                let output = val.to_string();
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(output.as_bytes());
+                } else if !output.is_empty() {
+                    print!("{}", output);
+                    let _ = std::io::stdout().flush();
+                }
+                self.return_value = Some(val);
                 Ok(true)
             }
             AstNodeKind::StringLiteral(s) => {
@@ -1012,9 +1274,6 @@ impl Executor {
                 Ok(true)
             }
 
-            // ---- OOP: Namespace, Class, Struct Declarations ----
-            // These are handled during first-pass registration; at execution time
-            // we simply recurse into the body so inner functions/statements register normally.
             AstNodeKind::NamespaceDecl { body, .. } => {
                 for stmt in body {
                     self.execute_node_with_input(stmt, input, out_file, jobs)?;
@@ -1023,7 +1282,6 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::ClassDecl { name, methods, .. } => {
-                // Register methods as qualified functions (ClassName::method_name)
                 for method_node in methods {
                     if let AstNodeKind::Function { name: mname, .. } = &method_node.kind {
                         let qualified = format!("{}::{}", name, mname);
@@ -1033,11 +1291,9 @@ impl Executor {
                 Ok(true)
             }
             AstNodeKind::StructDecl { .. } => {
-                // Struct definitions are fully handled by the registry first-pass
                 Ok(true)
             }
 
-            // ---- OOP: Object Instantiation ----
             AstNodeKind::ObjectInstantiation { class_name, args } => {
                 let base_class_name = if let Some(idx) = class_name.find('<') {
                     &class_name[..idx]
@@ -1080,12 +1336,14 @@ impl Executor {
 
                 let mut properties = HashMap::new();
                 for (fname, fdef) in fields {
-                    let val = if let Some(default_node) = &fdef.default_value {
-                        self.evaluate_node(default_node, jobs)?
-                    } else {
-                        IshValue::Null
-                    };
-                    properties.insert(fname.clone(), val);
+                    if !fdef.is_static { // Only initialize instance fields
+                        let val = if let Some(default_node) = &fdef.default_value {
+                            self.evaluate_node(default_node, jobs)?
+                        } else {
+                            IshValue::Null
+                        };
+                        properties.insert(fname.clone(), val);
+                    }
                 }
 
                 let mut eval_args = Vec::new();
@@ -1167,7 +1425,6 @@ impl Executor {
                 Ok(true)
             }
 
-            // ---- OOP: Method Call ----
             AstNodeKind::MethodCall { object, method_name, args } => {
                 let mut obj_val = self.evaluate_node(object, jobs)?;
                 
@@ -1191,7 +1448,6 @@ impl Executor {
                     }
                 }
                 
-                // Evaluate arguments before borrowing Gobbler
                 let mut eval_args = Vec::new();
                 for arg_node in args {
                     eval_args.push(self.evaluate_node(arg_node, jobs)?);
@@ -1239,7 +1495,6 @@ impl Executor {
                             (class_def.clone(), method.clone())
                         };
 
-                        // Check access specifier
                         Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
 
                         let mut evaluated_params = Vec::new();
@@ -1268,7 +1523,6 @@ impl Executor {
                             }
                         }
 
-                        // Push method scope
                         self.variables.push(HashMap::new());
                         self.function_bases.push(self.variables.len() - 1);
                         if let Some(scope) = self.variables.last_mut() {
@@ -1305,7 +1559,6 @@ impl Executor {
                 
                 match obj_val {
                     IshValue::String(s) => {
-                        // Check Native Stdlib Classes
                         for provider in &self.stdlib_providers {
                             if provider.name() == s {
                                 match provider.execute_method(&method_name, &eval_args, &mut self.gobbler) {
@@ -1319,7 +1572,6 @@ impl Executor {
                             }
                         }
 
-                        // Check if s is a class name (Static Method Call)
                         let resolved = self.registry.resolve_class_method(&s, method_name.as_str())
                             .map(|(c, m)| (c.clone(), m.clone()));
 
@@ -1331,7 +1583,6 @@ impl Executor {
                                 )));
                             }
 
-                            // Check access specifier
                             Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
 
                             let mut evaluated_params = Vec::new();
@@ -1360,7 +1611,6 @@ impl Executor {
                                 }
                             }
 
-                            // Push method scope
                             self.variables.push(HashMap::new());
                             self.function_bases.push(self.variables.len() - 1);
                             if let Some(scope) = self.variables.last_mut() {
@@ -1405,107 +1655,8 @@ impl Executor {
                 }
             }
 
-            // ---- OOP: Property Access ----
-            AstNodeKind::PropertyAccess { object, property_name } => {
-                let obj_val = self.evaluate_node(object, jobs)?;
-                
-                // Check if obj_val is an Enum reference
-                if let IshValue::String(s) = &obj_val {
-                    if let Some(enum_def) = self.registry.enums.get(s) {
-                        if let Some(index) = enum_def.variants.iter().position(|v| v == property_name) {
-                            let val = IshValue::Int(index as i32);
-                            let output = val.to_string();
-                            if let Some(path) = out_file {
-                                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                let _ = file.write_all(output.as_bytes());
-                            } else if !output.is_empty() {
-                                print!("{}", output);
-                                let _ = std::io::stdout().flush();
-                            }
-                            self.return_value = Some(val);
-                            return Ok(true);
-                        } else {
-                            return Err(IshError::ExecutionError(format!("Enum {} does not have variant {}", s, property_name)));
-                        }
-                    }
-                }
-
-                if let IshValue::Reference(id) = &obj_val {
-                    if let Some(heap_obj) = self.gobbler.get(*id) {
-                        match heap_obj {
-                            crate::core::gobbler::HeapObject::Object { class_name, properties } => {
-                                // Check field access
-                                if let Some(class_def) = self.registry.resolve_class(class_name) {
-                                    if let Some(field_def) = class_def.fields.get(property_name.as_str()) {
-                                        Registry::check_access(&field_def.access, self.current_class.as_deref(), &class_def.qualified_name)?;
-                                    }
-                                }
-
-                                let val = properties.get(property_name.as_str())
-                                    .cloned()
-                                    .unwrap_or(IshValue::Null);
-
-                                let output = val.to_string();
-                                if let Some(path) = out_file {
-                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                    let _ = file.write_all(output.as_bytes());
-                                } else if !output.is_empty() {
-                                    print!("{}", output);
-                                    let _ = std::io::stdout().flush();
-                                }
-                                self.return_value = Some(val);
-                                return Ok(true);
-                            }
-                            crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
-                                if property_name == "Length" {
-                                    self.return_value = Some(IshValue::Int(arr.len() as i32));
-                                    return Ok(true);
-                                }
-                            }
-                            crate::core::gobbler::HeapObject::Map(m) => {
-                                if property_name == "Count" {
-                                    self.return_value = Some(IshValue::Int(m.len() as i32));
-                                    return Ok(true);
-                                }
-                                let val = m.get(property_name.as_str())
-                                    .cloned()
-                                    .unwrap_or(IshValue::Null);
-                                let output = val.to_string();
-                                if let Some(path) = out_file {
-                                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                                    let _ = file.write_all(output.as_bytes());
-                                } else if !output.is_empty() {
-                                    print!("{}", output);
-                                    let _ = std::io::stdout().flush();
-                                }
-                                self.return_value = Some(val);
-                                return Ok(true);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(IshError::ExecutionError(format!(
-                    "Cannot access property '{}' on non-object value '{}'.", property_name, obj_val.to_string()
-                )))
-            }
             AstNodeKind::EnumDecl { .. } => Ok(true),
             AstNodeKind::WithImport { .. } => Ok(true),
-
-            AstNodeKind::IndexAccess { object, index } => {
-                let val = self.evaluate_node(node, jobs)?;
-                let output = val.to_string();
-                if let Some(path) = out_file {
-                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-                    let _ = file.write_all(output.as_bytes());
-                } else if !output.is_empty() {
-                    print!("{}", output);
-                    let _ = std::io::stdout().flush();
-                }
-                Ok(true)
-            }
-
         }
     }
 }
-

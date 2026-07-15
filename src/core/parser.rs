@@ -585,10 +585,34 @@ impl Parser {
                             return Err(IshError::ParseError(format!("Expected ']' after '{}['", type_name)));
                         }
                     }
-                    let assign = self.parse_assignment(true, None, Some(type_name))?;
-                    // Optional: we could attach `access` to the assignment if the AST supported it, 
-                    // but for now we just return the assignment.
-                    Ok(assign)
+
+                    let (line, col) = self.get_location();
+                    let name = match self.consume() {
+                        Some(tok) => match tok.kind {
+                            TokenKind::Word(w) => w,
+                            _ => return Err(IshError::ParseError("Expected field name".to_string())),
+                        },
+                        None => return Err(IshError::ParseError("Expected field name".to_string())),
+                    };
+
+                    let mut default_value = None;
+                    if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Assign)) {
+                        self.consume(); // =
+                        default_value = Some(Box::new(self.parse_expression()?));
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+                            self.consume();
+                        }
+                    } else if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+                        self.consume();
+                    }
+
+                    return Ok(AstNode::new(AstNodeKind::FieldDecl {
+                        name,
+                        type_specifier: Some(type_name),
+                        access,
+                        is_static,
+                        default_value,
+                    }, line, col));
                 }
                 _ => Err(IshError::ParseError("Expected class, struct, enum, or function declaration after modifiers".to_string())),
             }
@@ -709,12 +733,10 @@ impl Parser {
                             destructor = Some(body);
                         } else { unreachable!() }
                     } else {
-                        // Structs don't support arbitrary methods currently in Ish? But we just ignore them or push them.
-                        // For now we just drop it or return error? The old code returned error.
                         return Err(IshError::ParseError("Expected field declaration in struct".to_string()));
                     }
                 }
-                AstNodeKind::Assignment { .. } => fields.push(decl),
+                AstNodeKind::FieldDecl { .. } => fields.push(decl),
                 _ => return Err(IshError::ParseError("Expected field declaration in struct".to_string())),
             }
         }
@@ -961,8 +983,6 @@ impl Parser {
         Ok(stmts)
     }
 
-
-
     fn parse_command(&mut self) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
         
@@ -1181,7 +1201,6 @@ impl Parser {
                         } else {
                             ("___implicit___".to_string(), p.clone())
                         };
-                        
                         
                         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
                             self.consume();

@@ -7,6 +7,7 @@ pub struct Linter {
     function_bases: Vec<usize>,
     defined_functions: HashMap<String, usize>, // name -> param count
     in_loop_depth: usize,
+    current_class_fields: HashSet<String>,
 }
 
 impl Linter {
@@ -16,6 +17,7 @@ impl Linter {
             function_bases: vec![0],
             defined_functions: HashMap::new(),
             in_loop_depth: 0,
+            current_class_fields: HashSet::new(),
         }
     }
 
@@ -25,6 +27,10 @@ impl Linter {
 
     fn is_var_defined(&self, var_name: &str) -> bool {
         if var_name.is_empty() || var_name == "?" || var_name == "LAST" || var_name == "$" || var_name == "!" || var_name == "#" || var_name == "@" || var_name == "0" {
+            return true;
+        }
+        
+        if self.current_class_fields.contains(var_name) {
             return true;
         }
         
@@ -182,6 +188,11 @@ impl Linter {
                     }
                 }
             }
+            AstNodeKind::FieldDecl { default_value, .. } => {
+                if let Some(val) = default_value {
+                    self.check_node(val)?;
+                }
+            }
             AstNodeKind::Function { name, params, body, .. } => {
                 if name.is_empty() {
                     return Err(IshError::ParseError(format!("Linter Error at Line {}, Column {}: Function defined without a name", node.line, node.column)));
@@ -252,13 +263,20 @@ impl Linter {
                     self.check_node(val)?;
                 }
             }
-            // ---- OOP Nodes ----
             AstNodeKind::NamespaceDecl { body, .. } => {
                 for stmt in body {
                     self.check_node(stmt)?;
                 }
             }
             AstNodeKind::ClassDecl { methods, fields, constructor, destructor, base_class: _, .. } => {
+                let prev_fields = self.current_class_fields.clone();
+                self.current_class_fields.clear();
+                for field in fields {
+                    if let AstNodeKind::FieldDecl { name, .. } = &field.kind {
+                        self.current_class_fields.insert(name.clone());
+                    }
+                }
+
                 if let Some(c) = constructor {
                     self.defined_vars.push(std::collections::HashSet::new());
                     self.function_bases.push(self.defined_vars.len() - 1);
@@ -288,8 +306,18 @@ impl Linter {
                 for field in fields {
                     self.check_node(field)?;
                 }
+                
+                self.current_class_fields = prev_fields;
             }
             AstNodeKind::StructDecl { fields, constructor, destructor, .. } => {
+                let prev_fields = self.current_class_fields.clone();
+                self.current_class_fields.clear();
+                for field in fields {
+                    if let AstNodeKind::FieldDecl { name, .. } = &field.kind {
+                        self.current_class_fields.insert(name.clone());
+                    }
+                }
+
                 if let Some(c) = constructor {
                     self.defined_vars.push(std::collections::HashSet::new());
                     self.function_bases.push(self.defined_vars.len() - 1);
@@ -316,6 +344,8 @@ impl Linter {
                 for field in fields {
                     self.check_node(field)?;
                 }
+                
+                self.current_class_fields = prev_fields;
             }
             AstNodeKind::ObjectInstantiation { args, .. } => {
                 for arg in args {

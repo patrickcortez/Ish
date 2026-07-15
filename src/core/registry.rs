@@ -41,7 +41,9 @@ pub struct MethodDef {
 #[derive(Debug, Clone)]
 pub struct FieldDef {
     pub name: String,
+    pub type_specifier: Option<String>,
     pub access: AccessSpecifier,
+    pub is_static: bool,
     pub default_value: Option<AstNode>,
 }
 
@@ -120,11 +122,13 @@ impl Registry {
                 }
 
                 for field_node in fields {
-                    if let AstNodeKind::Assignment { variable, value, .. } = &field_node.kind {
-                        field_map.insert(variable.clone(), FieldDef {
-                            name: variable.clone(),
+                    if let AstNodeKind::FieldDecl { name: field_name, type_specifier, access, is_static, default_value } = &field_node.kind {
+                        field_map.insert(field_name.clone(), FieldDef {
+                            name: field_name.clone(),
+                            type_specifier: type_specifier.clone(),
                             access: access.clone(),
-                            default_value: Some(*value.clone()),
+                            is_static: *is_static,
+                            default_value: default_value.as_ref().map(|b| *b.clone()),
                         });
                     }
                 }
@@ -146,11 +150,13 @@ impl Registry {
                 let mut field_map = HashMap::new();
 
                 for field_node in fields {
-                    if let AstNodeKind::Assignment { variable, value, .. } = &field_node.kind {
-                        field_map.insert(variable.clone(), FieldDef {
-                            name: variable.clone(),
+                    if let AstNodeKind::FieldDecl { name: field_name, type_specifier, access, is_static, default_value } = &field_node.kind {
+                        field_map.insert(field_name.clone(), FieldDef {
+                            name: field_name.clone(),
+                            type_specifier: type_specifier.clone(),
                             access: access.clone(),
-                            default_value: Some(*value.clone()),
+                            is_static: *is_static,
+                            default_value: default_value.as_ref().map(|b| *b.clone()),
                         });
                     }
                 }
@@ -177,36 +183,92 @@ impl Registry {
                     variants: variants.clone(),
                 });
             }
-            AstNodeKind::WithImport { path } => {
-                let file_path = path.replace(".", std::path::MAIN_SEPARATOR_STR) + ".ish";
-                let absolute_path = match std::env::current_dir() {
-                    Ok(cwd) => cwd.join(&file_path),
-                    Err(_) => std::path::PathBuf::from(&file_path),
-                };
-                
-                if absolute_path.exists() {
+
+AstNodeKind::WithImport { path } => {
+                let target_namespace = path; // e.g., "Mod"
+                let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+                // 1. Gather ALL .ish files recursively in the project directory
+                let mut dirs_to_check = vec![base_dir];
+                let mut all_ish_files = Vec::new();
+
+                while let Some(dir) = dirs_to_check.pop() {
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let entry_path = entry.path();
+                            if entry_path.is_dir() {
+                                dirs_to_check.push(entry_path);
+                            } else if entry_path.extension().and_then(|s| s.to_str()) == Some("ish") {
+                                all_ish_files.push(entry_path);
+                            }
+                        }
+                    }
+                }
+
+                let mut found_namespace = false;
+
+                // 2. Helper function to recursively search the single AstNode for the namespace
+                fn node_contains_namespace(node: &AstNode, target: &str) -> bool {
+                    match &node.kind {
+                        AstNodeKind::NamespaceDecl { name, body } => {
+                            if name.as_str() == target {
+                                return true;
+                            }
+                            for stmt in body {
+                                if node_contains_namespace(stmt, target) {
+                                    return true;
+                                }
+                            }
+                        }
+                        AstNodeKind::If { body, else_body, .. } => {
+                            for stmt in body {
+                                if node_contains_namespace(stmt, target) {
+                                    return true;
+                                }
+                            }
+                            if let Some(else_stmts) = else_body {
+                                for stmt in else_stmts {
+                                    if node_contains_namespace(stmt, target) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    false
+                }
+
+                // 3. Scan every file to see if it belongs to the requested namespace
+                for absolute_path in all_ish_files {
                     let absolute_path_str = absolute_path.to_string_lossy().to_string();
-                    if self.loaded_files.insert(absolute_path_str.clone()) {
-                        if let Ok(content) = std::fs::read_to_string(&absolute_path) {
-                            let mut tokenizer = crate::core::tokenizer::Tokenizer::new(&content);
-                            if let Ok(tokens) = tokenizer.tokenize() {
-                                let mut parser = crate::core::parser::Parser::new(tokens);
-                                if let Ok(ast) = parser.parse() {
-                                    let namespace = if let Some(last_dot) = path.rfind('.') {
-                                        path[..last_dot].to_string() // "test.MyNamespace"
-                                    } else {
-                                        "".to_string()
-                                    };
-                                    self.namespace_stack.push(namespace);
+                    
+                    if self.loaded_files.contains(&absolute_path_str) {
+                        continue;
+                    }
+
+                    if let Ok(content) = std::fs::read_to_string(&absolute_path) {
+                        let mut tokenizer = crate::core::tokenizer::Tokenizer::new(&content);
+                        if let Ok(tokens) = tokenizer.tokenize() {
+                            let mut parser = crate::core::parser::Parser::new(tokens);
+                            if let Ok(ast) = parser.parse() {
+                                
+                                // Call our recursive helper instead of using a loop on &ast
+                                if node_contains_namespace(&ast, target_namespace.as_str()) {
+                                    self.loaded_files.insert(absolute_path_str);
                                     let _ = self.register_declarations(&ast);
-                                    self.namespace_stack.pop();
+                                    found_namespace = true;
                                 }
                             }
                         }
                     }
                 }
+
+                if !found_namespace {
+                    eprintln!("Error: Could not find any files containing namespace '{}'", target_namespace);
+                }
             }
-            // Recurse into other compound nodes that might contain declarations
+            
             AstNodeKind::If { body, else_body, .. } => {
                 for stmt in body {
                     self.register_declarations(stmt)?;
@@ -217,19 +279,15 @@ impl Registry {
                     }
                 }
             }
-            // All other node kinds are not declarations; skip them
             _ => {}
         }
         Ok(())
     }
 
-    /// Look up a class by name, trying both bare name and qualified name.
     pub fn resolve_class(&self, name: &str) -> Option<&ClassDef> {
-        // Try exact match first
         if let Some(cls) = self.classes.get(name) {
             return Some(cls);
         }
-        // Try all qualified names that end with ::name
         for (qn, cls) in &self.classes {
             if qn.ends_with(&format!("::{}", name)) || qn == name {
                 return Some(cls);
@@ -238,8 +296,6 @@ impl Registry {
         None
     }
 
-    /// Resolves a method on a class, walking up the inheritance chain if necessary.
-    /// Returns the ClassDef where the method was found, and the MethodDef itself.
     pub fn resolve_class_method<'a>(&'a self, start_class: &str, method_name: &str) -> Option<(&'a ClassDef, &'a MethodDef)> {
         let mut current_class_name = start_class.to_string();
         loop {
@@ -259,7 +315,6 @@ impl Registry {
         None
     }
 
-    /// Look up a struct by name, trying both bare name and qualified name.
     pub fn resolve_struct(&self, name: &str) -> Option<&StructDef> {
         if let Some(s) = self.structs.get(name) {
             return Some(s);
@@ -272,8 +327,6 @@ impl Registry {
         None
     }
 
-    /// Validate that a `Program` class with a `main` method exists.
-    /// Returns the qualified name of the Program class.
     pub fn find_entry_point(&self) -> Result<String, IshError> {
         for (qn, cls) in &self.classes {
             if cls.name == "Program" {
@@ -319,13 +372,11 @@ impl Registry {
         ))
     }
 
-    /// Check if an access specifier allows access from outside the class.
     pub fn check_access(access: &AccessSpecifier, caller_class: Option<&str>, target_class: &str) -> Result<(), IshError> {
         match access {
             AccessSpecifier::Public => Ok(()),
-            AccessSpecifier::Internal => Ok(()), // Within same assembly (for now, always allowed)
+            AccessSpecifier::Internal => Ok(()),
             AccessSpecifier::Protected => {
-                // For now, only allow within same class (no inheritance yet)
                 if caller_class == Some(target_class) {
                     Ok(())
                 } else {

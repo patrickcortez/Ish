@@ -44,8 +44,6 @@ impl IshValue {
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct AstNode {
     pub kind: AstNodeKind,
@@ -166,6 +164,15 @@ pub enum AstNodeKind {
         fields: Vec<AstNode>,
         constructor: Option<(AccessSpecifier, Vec<Param>, Vec<AstNode>)>,
         destructor: Option<Vec<AstNode>>,
+    },
+
+    /// OOP: Field Declaration
+    FieldDecl {
+        name: String,
+        type_specifier: Option<String>,
+        access: AccessSpecifier,
+        is_static: bool,
+        default_value: Option<Box<AstNode>>,
     },
 
     /// OOP: Enum Declaration

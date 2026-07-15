@@ -250,6 +250,7 @@ impl Tokenizer {
                         "if" => TokenKind::If,
                         "elif" => TokenKind::Elif,
                         "else" => TokenKind::Else,
+                        "while" => TokenKind::WhileAsync,
                         "for" => TokenKind::For,
                         "foreach" => TokenKind::Foreach,
                         "var" => TokenKind::Var,
