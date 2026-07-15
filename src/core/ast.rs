@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum IshValue {
     String(String),
     Int(i32),
     Float(f32),
     Bool(bool),
+    Char(char),
     Null,
     Reference(usize),
+    TypeRef(String)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +35,9 @@ impl IshValue {
             IshValue::Float(f) => f.to_string(),
             IshValue::Bool(b) => b.to_string(),
             IshValue::Null => "null".to_string(),
+            IshValue::Char(c) => c.to_string(),
             IshValue::Reference(id) => format!("<Reference {}>", id),
+            IshValue::TypeRef(t) => format!("<Type {}>", t),
         }
     }
 
@@ -61,6 +63,8 @@ impl AstNode {
 pub enum AstNodeKind {
     /// String Literal
     StringLiteral(String),
+
+    CharLiteral(char),
 
     /// Variable Reference
     Variable(String),

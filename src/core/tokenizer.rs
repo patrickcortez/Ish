@@ -2,6 +2,7 @@
 pub enum TokenKind {
     Word(String),
     StringLiteral(String),
+    CharLiteral(char),
     InterpolatedStringLiteral(String),
 
     // Ish custom syntax
@@ -33,6 +34,7 @@ pub enum TokenKind {
     IntKeyword,
     BoolKeyword,
     FloatKeyword,
+    CharKeyWord,
     WhileLoop,      // Note: 'while' can mean parallel exec or while loop. We disambiguate in Parser.
     Function,
     Return,
@@ -235,9 +237,13 @@ impl Tokenizer {
                         return Err(crate::error::IshError::ParseError("Variables no longer use the $ prefix in Ish.".to_string()));
                     }
                 }
-                '"' | '\'' => {
+                '"' => {
                     let string_val = self.read_string(ch)?;
                     TokenKind::StringLiteral(string_val)
+                }
+                '\'' => {
+                    let char_val = self.read_char_literal()?;
+                    TokenKind::CharLiteral(char_val)
                 }
                 _ => {
                     let word = self.read_word();
@@ -280,6 +286,7 @@ impl Tokenizer {
                         "enum" => TokenKind::Enum,
                         "params" => TokenKind::Params,
                         "List" => TokenKind::List,
+                        "char" => TokenKind::CharKeyWord,
                         _ => TokenKind::Word(word),
                     }
                 }
@@ -346,5 +353,40 @@ impl Tokenizer {
         }
 
         Err(crate::error::IshError::ParseError("Unterminated string".to_string()))
+    }
+
+    fn read_char_literal(&mut self) -> Result<char, crate::error::IshError> {
+        self.advance(); // Skip opening quote
+        let mut char_val = '\0';
+        if self.position < self.input.len() {
+            let ch = self.input[self.position];
+            if ch == '\\' {
+                self.advance();
+                if self.position < self.input.len() {
+                    let next_ch = self.input[self.position];
+                    char_val = match next_ch {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '\\' => '\\',
+                        '\'' => '\'',
+                        '"' => '"',
+                        '0' => '\0',
+                        _ => next_ch,
+                    };
+                    self.advance();
+                }
+            } else {
+                char_val = ch;
+                self.advance();
+            }
+        }
+        
+        if self.position < self.input.len() && self.input[self.position] == '\'' {
+            self.advance(); // Skip closing quote
+            Ok(char_val)
+        } else {
+            Err(crate::error::IshError::ParseError("Unterminated char literal".to_string()))
+        }
     }
 }

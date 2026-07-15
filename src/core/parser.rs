@@ -276,6 +276,14 @@ impl Parser {
             }
         }
 
+        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::CharLiteral(_))) {
+            if let Some(tok) = self.consume() {
+                if let TokenKind::CharLiteral(c) = tok.kind {
+                    return Ok(AstNode::new(AstNodeKind::Assignment { type_specifier, variable: var_name, index, value: Box::new(AstNode::new(AstNodeKind::CharLiteral(c), line, col)), is_declaration }, line, col));
+                }
+            }
+        }
+
         let value = self.parse_statement()?; 
         Ok(AstNode::new(AstNodeKind::Assignment { type_specifier, variable: var_name, index, value: Box::new(value), is_declaration }, line, col))
     }
@@ -402,12 +410,25 @@ impl Parser {
 
     fn parse_for_loop(&mut self) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
-        self.consume(); // Consume TokenKind::For
+        self.consume(); // Consume TokenKind::For or TokenKind::Foreach
         
-        let variable = match self.consume().ok_or_else(|| IshError::ParseError("Expected variable name after 'for'".to_string()))? {
+        let mut has_paren = false;
+        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LParen)) {
+            self.consume();
+            has_paren = true;
+        }
+
+        // Optional type specifier like `var` or `char` or `string` before the variable
+        if let Some(tok) = self.peek() {
+            if matches!(tok.kind, TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::CharKeyWord) {
+                self.consume();
+            }
+        }
+
+        let variable = match self.consume().ok_or_else(|| IshError::ParseError("Expected variable name after 'for'/'foreach'".to_string()))? {
             tok => match tok.kind {
                 TokenKind::Word(v) => v,
-                _ => return Err(IshError::ParseError("Expected variable name after 'for'".to_string())),
+                _ => return Err(IshError::ParseError("Expected variable name after 'for'/'foreach'".to_string())),
             },
         };
 
@@ -415,11 +436,26 @@ impl Parser {
             if let TokenKind::Word(w) = &tok.kind {
                 if w == "in" {
                     self.consume();
+                } else {
+                    return Err(IshError::ParseError(format!("Expected 'in' after foreach variable, found '{}'", w)));
                 }
+            } else {
+                return Err(IshError::ParseError("Expected 'in' after foreach variable".to_string()));
             }
+        } else {
+            return Err(IshError::ParseError("Expected 'in' after foreach variable".to_string()));
         }
         
         let iterable = self.parse_expression()?;
+
+        if has_paren {
+            if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RParen)) {
+                self.consume();
+            } else {
+                return Err(IshError::ParseError("Expected ')' after foreach iterable".to_string()));
+            }
+        }
+
         let body = self.parse_block()?;
         
         Ok(AstNode::new(AstNodeKind::For {
@@ -541,7 +577,7 @@ impl Parser {
                 TokenKind::Struct => self.parse_struct(access),
                 TokenKind::Function => self.parse_function(access, is_static),
                 TokenKind::Enum => self.parse_enum(access),
-                TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::Word(_) => {
+                TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Word(_) => {
                     let kw_tok = self.consume().unwrap();
                     let mut type_name = match kw_tok.kind {
                         TokenKind::Var => "var".to_string(),
@@ -550,6 +586,7 @@ impl Parser {
                         TokenKind::FloatKeyword => "float".to_string(),
                         TokenKind::BoolKeyword => "bool".to_string(),
                         TokenKind::List => "List".to_string(),
+                        TokenKind::CharKeyWord => "char".to_string(),
                         TokenKind::Word(w) => w,
                         _ => unreachable!(),
                     };
@@ -569,6 +606,7 @@ impl Parser {
                                     TokenKind::IntKeyword => type_name.push_str("int"),
                                     TokenKind::FloatKeyword => type_name.push_str("float"),
                                     TokenKind::BoolKeyword => type_name.push_str("bool"),
+                                    TokenKind::CharKeyWord => type_name.push_str("char"),
                                     TokenKind::Comma => type_name.push(','),
                                     _ => return Err(IshError::ParseError("Invalid generic type argument".to_string())),
                                 }
@@ -827,13 +865,14 @@ impl Parser {
                     let mut type_name = None;
                     let mut is_array = false;
                     if let Some(tok) = self.peek() {
-                        if matches!(tok.kind, TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::Word(_)) {
+                        if matches!(tok.kind, TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Word(_)) {
                             let kw_tok = self.consume().ok_or_else(|| IshError::ParseError("Expected type keyword".to_string()))?;
                             let mut tn = match kw_tok.kind {
                                 TokenKind::StringKeyword => "string".to_string(),
                                 TokenKind::IntKeyword => "int".to_string(),
                                 TokenKind::FloatKeyword => "float".to_string(),
                                 TokenKind::BoolKeyword => "bool".to_string(),
+                                TokenKind::CharKeyWord => "char".to_string(),
                                 TokenKind::List => "List".to_string(),
                                 TokenKind::Word(w) => w,
                                 _ => return Err(IshError::ParseError("Expected type keyword".to_string())),
@@ -854,6 +893,7 @@ impl Parser {
                                             TokenKind::IntKeyword => tn.push_str("int"),
                                             TokenKind::FloatKeyword => tn.push_str("float"),
                                             TokenKind::BoolKeyword => tn.push_str("bool"),
+                                            TokenKind::CharKeyWord => tn.push_str("char"),
                                             TokenKind::Comma => tn.push(','),
                                             _ => return Err(IshError::ParseError("Invalid generic type argument".to_string())),
                                         }
@@ -987,7 +1027,7 @@ impl Parser {
         let (line, col) = self.get_location();
         
         if let Some(tok) = self.peek() {
-            if matches!(tok.kind, TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword) {
+            if matches!(tok.kind, TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::CharKeyWord | TokenKind::List) {
                 let kw_tok = self.consume().unwrap();
                 let mut type_name = match kw_tok.kind {
                     TokenKind::Var => "var",
@@ -995,6 +1035,8 @@ impl Parser {
                     TokenKind::IntKeyword => "int",
                     TokenKind::FloatKeyword => "float",
                     TokenKind::BoolKeyword => "bool",
+                    TokenKind::CharKeyWord => "char",
+                    TokenKind::List => "List",
                     _ => unreachable!(),
                 }.to_string();
 
@@ -1045,6 +1087,7 @@ impl Parser {
                                 TokenKind::IntKeyword => class_name.push_str("int"),
                                 TokenKind::FloatKeyword => class_name.push_str("float"),
                                 TokenKind::BoolKeyword => class_name.push_str("bool"),
+                                TokenKind::CharKeyWord => class_name.push_str("char"),
                                 TokenKind::Comma => class_name.push(','),
                                 _ => return Err(IshError::ParseError("Invalid generic type argument".to_string())),
                             }
@@ -1154,6 +1197,13 @@ impl Parser {
                     is_string_literal = true;
                     p
                 }
+
+                TokenKind::CharLiteral(c) => {
+                    let val = *c;
+                    self.consume();
+                    return Ok(AstNode::new(AstNodeKind::CharLiteral(val), line, col));
+                }
+
                 TokenKind::InterpolatedStringLiteral(w) => {
                     let p = w.clone();
                     self.consume();
@@ -1316,6 +1366,12 @@ impl Parser {
                     args.push(word.clone());
                     self.consume();
                 }
+
+                TokenKind::CharLiteral(c) => {
+                    args.push(c.to_string());
+                    self.consume();
+                }
+
                 TokenKind::Assign => {
                     args.push("=".to_string());
                     self.consume();

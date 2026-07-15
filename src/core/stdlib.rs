@@ -1,6 +1,6 @@
 use crate::error::IshError;
 use crate::core::ast::IshValue;
-use crate::core::io::{StdinStream, StdoutStream, StderrStream, InputStream, OutputStream};
+use crate::core::io::{StdinStream, StdoutStream, InputStream, OutputStream};
 use crate::core::io::color::{Color, ColorManager};
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
@@ -18,7 +18,9 @@ fn as_string(v: &IshValue) -> String {
         IshValue::Float(f) => f.to_string(),
         IshValue::Bool(b) => b.to_string(),
         IshValue::Null => "null".to_string(),
+        IshValue::Char(c) => c.to_string(),
         IshValue::Reference(id) => format!("<Reference {}>", id),
+        IshValue::TypeRef(t) => format!("<Type {}>", t),
     }
 }
 

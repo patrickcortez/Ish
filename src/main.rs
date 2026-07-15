@@ -9,7 +9,7 @@ pub mod managers;
 use core::io::platform::enable_virtual_terminal_processing;
 
 #[derive(Parser, Debug)]
-#[command(name = "ish")]
+#[command(name = "Ish")]
 #[command(about = "Ish Programming Language", long_about = None)]
 struct Args {
     /// Execute a command and exit

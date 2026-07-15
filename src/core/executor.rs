@@ -1,7 +1,5 @@
-use crate::core::ast::{AstNode, AstNodeKind, IshValue, AccessSpecifier};
+use crate::core::ast::{AstNode, AstNodeKind, IshValue};
 use crate::error::IshError;
-use std::process::{Command, Stdio};
-use std::fs::File;
 use std::io::Write;
 use std::collections::HashMap;
 use crate::core::stdlib::{StdlibProvider, IshStr, IshFS, IshTime, IshNet, IshOS};
@@ -56,6 +54,8 @@ impl Executor {
             crate::core::ast::IshValue::Float(f) => f.to_string(),
             crate::core::ast::IshValue::Bool(b) => b.to_string(),
             crate::core::ast::IshValue::Null => "null".to_string(),
+            crate::core::ast::IshValue::Char(c) => c.to_string(),
+            crate::core::ast::IshValue::TypeRef(t) => format!("<Type {}>", t),
             crate::core::ast::IshValue::Reference(id) => {
                 if let Some(obj) = self.gobbler.get(*id) {
                     match obj {
@@ -355,17 +355,35 @@ impl Executor {
             AstNodeKind::InterpolatedString(nodes) => {
                 let mut result = String::new();
                 for n in nodes {
-                    match self.evaluate_node(n, jobs)? {
+                    let eval_val = self.evaluate_node(n, jobs)?;
+                    match eval_val {
                         IshValue::String(s) => result.push_str(&s),
                         IshValue::Int(i) => result.push_str(&i.to_string()),
                         IshValue::Float(f) => result.push_str(&f.to_string()),
                         IshValue::Bool(b) => result.push_str(&b.to_string()),
-                        _ => result.push_str(&self.evaluate_node(n, jobs)?.to_string()),
+                        IshValue::Char(c) => result.push(c),
+                        _ => result.push_str(&eval_val.to_string()),
                     }
                 }
                 Ok(IshValue::String(result))
             }
+
+            AstNodeKind::CharLiteral(c) => Ok(IshValue::Char(*c)),
+
             AstNodeKind::Variable(var_name) => {
+
+                if self.registry.classes.contains_key(var_name) || 
+                self.registry.structs.contains_key(var_name) || 
+                self.registry.enums.contains_key(var_name) || 
+                var_name == "string" || var_name == "char" || var_name == "List" ||
+                var_name == "Math" || var_name == "Time" || var_name == "Str" || 
+                var_name == "FS" || var_name == "Net" || var_name == "OS" || 
+                var_name == "ExtProc" || var_name == "CommandLine" 
+                {   
+                    return Ok(IshValue::TypeRef(var_name.clone()));
+                }
+
+
                 let base_idx = *self.function_bases.last().unwrap_or(&0);
                 let mut search_scopes = vec![];
                 for i in (base_idx..self.variables.len()).rev() {
@@ -456,6 +474,17 @@ impl Executor {
             AstNodeKind::IndexAccess { object, index } => {
                 let obj_val = self.evaluate_node(object, jobs)?;
                 let index_val = self.evaluate_node(index, jobs)?;
+
+                if let IshValue::String(s) = &obj_val {
+                    if let IshValue::Int(i) = index_val {
+                        if i >= 0 && (i as usize) < s.chars().count() {
+                            return Ok(IshValue::Char(s.chars().nth(i as usize).unwrap()));
+                        }
+                        return Err(IshError::ExecutionError(format!("IndexOutOfRangeException: {}", i)));
+                    }
+                    return Err(IshError::ExecutionError("String index must be an integer".into()));
+                }
+
                 if let IshValue::Reference(id) = obj_val {
                     if let Some(heap_obj) = self.gobbler.get(id) {
                         match heap_obj {
@@ -479,6 +508,12 @@ impl Executor {
             }
             AstNodeKind::PropertyAccess { object, property_name } => {
                 let obj_val = self.evaluate_node(object, jobs)?;
+
+                if let IshValue::TypeRef(s) = &obj_val {
+                    if s == "string" && property_name == "Empty" {
+                        return Ok(IshValue::String(String::new()));
+                    }
+                }
                 
                 if let IshValue::String(s) = &obj_val {
                     // Check Enum
@@ -861,6 +896,18 @@ impl Executor {
     pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError>
     {
         match &node.kind {
+            AstNodeKind::CharLiteral(_) => {
+                let val = self.evaluate_node(node, jobs)?;
+                let output = val.to_string();
+                if let Some(path) = out_file {
+                    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                    let _ = file.write_all(output.as_bytes());
+                } else if !output.is_empty() {
+                    print!("{}", output);
+                    let _ = std::io::stdout().flush();
+                }
+                return Ok(true)
+            }
             AstNodeKind::InterpolatedString(_) | AstNodeKind::BinaryOp { .. } | AstNodeKind::UnaryOp { .. } | AstNodeKind::TernaryOp { .. } => {
                 let val = self.evaluate_node(node, jobs)?;
                 let success = match val {
@@ -868,7 +915,7 @@ impl Executor {
                     _ => true,
                 };
                 self.last_exit_code = if success { 0 } else { 1 };
-                Ok(success)
+                return Ok(success)
             }
 
             AstNodeKind::Assignment { type_specifier, variable, index, value, is_declaration } => {
@@ -928,7 +975,7 @@ impl Executor {
                     if !found { return Err(IshError::ExecutionError(format!("Variable {} not found", variable))); }
                     return Ok(true);
                 }
-                
+
                 if *is_declaration {
                     if let Some(scope) = self.variables.last_mut() {
                         scope.insert(variable.clone(), val);
@@ -1053,7 +1100,7 @@ impl Executor {
                         return Err(IshError::ExecutionError(format!("Variable '{}' is not declared. Use 'declare {} = ...' to declare it.", variable, variable)));
                     }
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Switch { expression, cases, default_case } => {
                 let expr_val = self.evaluate_node(expression, jobs)?;
@@ -1082,7 +1129,7 @@ impl Executor {
                     }
                 }
                 if self.breaking { self.breaking = false; }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::If { condition, body, else_body } => {
                 let success = match self.evaluate_node(condition, jobs)? {
@@ -1109,27 +1156,29 @@ impl Executor {
                     }
                     let _ = self.pop_scope(jobs);
                 }
-                Ok(block_success)
+                return Ok(block_success)
             }
             AstNodeKind::For { variable, iterable, body } => {
                 let iterable_val = self.evaluate_node(iterable, jobs)?;
-                let items: Vec<String> = match iterable_val {
+                let items: Vec<IshValue> = match iterable_val {
                     IshValue::Reference(id) => {
-                        if let Some(crate::core::gobbler::HeapObject::Array(arr)) | Some(crate::core::gobbler::HeapObject::List(arr)) = self.gobbler.get(id) {
-                            arr.iter().map(|v| v.to_string()).collect()
+                        if let Some(crate::core::gobbler::HeapObject::Array(arr)) = self.gobbler.get(id) {
+                            arr.clone()
+                        } else if let Some(crate::core::gobbler::HeapObject::List(arr)) = self.gobbler.get(id) {
+                            arr.clone()
                         } else {
-                            vec!["<Reference>".to_string()]
+                            vec![IshValue::Reference(id)]
                         }
                     }
-                    IshValue::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
-                    _ => vec![iterable_val.to_string()],
+                    IshValue::String(s) => s.chars().map(|c| IshValue::Char(c)).collect(),
+                    _ => vec![iterable_val.clone()],
                 };
                 let mut block_success = true;
                 for item in items {
                     if self.returning || self.breaking { break; }
                     self.variables.push(HashMap::new());
                     if let Some(scope) = self.variables.last_mut() {
-                        scope.insert(variable.clone(), IshValue::String(item));
+                        scope.insert(variable.clone(), item);
                     }
                     for stmt in body {
                         block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
@@ -1142,7 +1191,7 @@ impl Executor {
                     if self.breaking || self.returning { break; }
                 }
                 if self.breaking { self.breaking = false; }
-                Ok(block_success)
+                return Ok(block_success)
             }
             AstNodeKind::While { condition, body } => {
                 let mut block_success = true;
@@ -1167,7 +1216,7 @@ impl Executor {
                     if self.breaking || self.returning { break; }
                 }
                 if self.breaking { self.breaking = false; }
-                Ok(block_success)
+                return Ok(block_success)
             }
             AstNodeKind::TryCatch { try_body, error_var, catch_body } => {
                 let mut success = true;
@@ -1203,15 +1252,15 @@ impl Executor {
                 }
                 let _ = self.pop_scope(jobs);
                 self.last_exit_code = if success { 0 } else { 1 };
-                Ok(success)
+                return Ok(success)
             }
             AstNodeKind::Break => {
                 self.breaking = true;
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Continue => {
                 self.continuing = true;
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::FieldDecl { name, default_value, .. } => {
                 let val = if let Some(def) = default_value {
@@ -1222,14 +1271,14 @@ impl Executor {
                 if let Some(scope) = self.variables.last_mut() {
                     scope.insert(name.clone(), val);
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Function { name, .. } => {
                 self.functions.insert(name.clone(), node.clone());
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Array(_) | AstNodeKind::Map(_) => {
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Variable(var_name) => {
                 let val = self.evaluate_node(node, jobs)?;
@@ -1241,7 +1290,7 @@ impl Executor {
                     print!("{}", output);
                     let _ = std::io::stdout().flush();
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::PropertyAccess { .. } | AstNodeKind::IndexAccess { .. } => {
                 let val = self.evaluate_node(node, jobs)?;
@@ -1254,7 +1303,7 @@ impl Executor {
                     let _ = std::io::stdout().flush();
                 }
                 self.return_value = Some(val);
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::StringLiteral(s) => {
                 let resolved = self.resolve_var(s, jobs)?;
@@ -1265,13 +1314,13 @@ impl Executor {
                     print!("{}", resolved);
                     let _ = std::io::stdout().flush();
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::Return(inner) => {
                 let val = self.evaluate_node(inner, jobs)?;
                 self.return_value = Some(val);
                 self.returning = true;
-                Ok(true)
+                return Ok(true)
             }
 
             AstNodeKind::NamespaceDecl { body, .. } => {
@@ -1279,7 +1328,7 @@ impl Executor {
                     self.execute_node_with_input(stmt, input, out_file, jobs)?;
                     if self.returning || self.breaking || self.continuing { break; }
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::ClassDecl { name, methods, .. } => {
                 for method_node in methods {
@@ -1288,10 +1337,10 @@ impl Executor {
                         self.functions.insert(qualified, method_node.clone());
                     }
                 }
-                Ok(true)
+                return Ok(true)
             }
             AstNodeKind::StructDecl { .. } => {
-                Ok(true)
+                return Ok(true)
             }
 
             AstNodeKind::ObjectInstantiation { class_name, args } => {
@@ -1422,10 +1471,40 @@ impl Executor {
                     properties,
                 });
                 self.return_value = Some(IshValue::Reference(obj_ref));
-                Ok(true)
+                return Ok(true)
             }
 
             AstNodeKind::MethodCall { object, method_name, args } => {
+                let mut eval_args = Vec::new();
+
+                for arg_node in args {
+                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                }
+
+                let mut mutated = false;
+            
+                if let AstNodeKind::Variable(var_name) = &object.kind {
+                    if method_name == "Append" || method_name == "AppendTo" || method_name == "Clear" {
+                        for scope in self.variables.iter_mut().rev() {
+                            if let Some(existing) = scope.get_mut(var_name) {
+                                if let IshValue::String(s) = existing {
+                                    mutated = true;
+                                    if method_name == "Clear" {
+                                        s.clear();
+                                    } else if let Some(arg) = eval_args.get(0) {
+                                        s.push_str(&arg.to_string());
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        if mutated {
+                            self.last_exit_code = 0;
+                            return Ok(true);
+                        }
+                    }
+                }
+
                 let mut obj_val = self.evaluate_node(object, jobs)?;
                 
                 if let IshValue::String(ref s) = obj_val {
@@ -1558,7 +1637,9 @@ impl Executor {
                 }
                 
                 match obj_val {
-                    IshValue::String(s) => {
+
+                    IshValue::TypeRef(ref s) => {
+                        // A. STD-LIB Fallback
                         for provider in &self.stdlib_providers {
                             if provider.name() == s {
                                 match provider.execute_method(&method_name, &eval_args, &mut self.gobbler) {
@@ -1572,91 +1653,255 @@ impl Executor {
                             }
                         }
 
-                        let resolved = self.registry.resolve_class_method(&s, method_name.as_str())
-                            .map(|(c, m)| (c.clone(), m.clone()));
+                        // B. STATIC STRING METHODS
+                        if s == "string" {
+                            match method_name.as_str() {
+                                "IsNullOrWhiteSpace" => {
+                                    let is_null_or_ws = match eval_args.get(0) {
+                                        Some(IshValue::String(str_val)) => str_val.trim().is_empty(),
+                                        Some(IshValue::Null) => true,
+                                        None => true,
+                                        _ => false,
+                                    };
+                                    self.return_value = Some(IshValue::Bool(is_null_or_ws));
+                                    return Ok(true);
+                                }
+                                "Join" => {
+                                    let arr_val = eval_args.get(0);
+                                    let sep_val = eval_args.get(1);
+                                    
+                                    let sep_char = match sep_val {
+                                        Some(IshValue::Char(c)) => c.to_string(),
+                                        Some(IshValue::String(s)) => s.clone(),
+                                        _ => "".to_string(),
+                                    };
 
-                        if let Some((class_def_clone, method_clone)) = resolved {
-
-                            if !method_clone.is_static {
-                                return Err(IshError::ExecutionError(format!(
-                                    "Cannot call instance method '{}' without an object instance.", method_name
-                                )));
-                            }
-
-                            Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
-
-                            let mut evaluated_params = Vec::new();
-                            let mut arg_idx = 0;
-                            for param in &method_clone.params {
-                                if param.is_variadic {
-                                    let mut variadic_arr = Vec::new();
-                                    while arg_idx < eval_args.len() {
-                                        variadic_arr.push(eval_args[arg_idx].clone());
-                                        arg_idx += 1;
-                                    }
-                                    let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
-                                    evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
-                                } else {
-                                    if arg_idx < eval_args.len() {
-                                        evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
-                                        arg_idx += 1;
+                                    let mut strs = Vec::new();
+                                    if let Some(IshValue::Reference(id)) = arr_val {
+                                        if let Some(heap_obj) = self.gobbler.get(*id) {
+                                            match heap_obj {
+                                                crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                                    for item in arr { strs.push(item.to_string()); }
+                                                }
+                                                _ => return Err(IshError::ExecutionError("string.Join requires an array or list".into())),
+                                            }
+                                        }
                                     } else {
-                                        if let Some(default_expr) = &param.default_value {
-                                            let val = self.evaluate_node(default_expr, jobs)?;
-                                            evaluated_params.push((param.name.clone(), val));
-                                        } else {
-                                            evaluated_params.push((param.name.clone(), IshValue::Null));
+                                        return Err(IshError::ExecutionError("string.Join requires an array or list".into()));
+                                    }
+                                    self.return_value = Some(IshValue::String(strs.join(&sep_char)));
+                                    return Ok(true);
+                                }
+                                "Concat" => {
+                                    let mut strs = Vec::new();
+                                    if eval_args.len() == 1 && matches!(eval_args[0], IshValue::Reference(_)) {
+                                        if let IshValue::Reference(id) = eval_args[0] {
+                                            if let Some(heap_obj) = self.gobbler.get(id) {
+                                                match heap_obj {
+                                                    crate::core::gobbler::HeapObject::Array(arr) | crate::core::gobbler::HeapObject::List(arr) => {
+                                                        for item in arr { strs.push(item.to_string()); }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        for arg in eval_args { strs.push(arg.to_string()); }
+                                    }
+                                    self.return_value = Some(IshValue::String(strs.join("")));
+                                    return Ok(true);
+                                }
+                                _ => return Err(IshError::ExecutionError(format!("Unknown static method on string: {}", method_name))),
+                            }
+                        } else {
+                            Err(IshError::ExecutionError(format!("Cannot call method '{}' on type '{}'", method_name, s)))
+                        }
+                    }
+
+                    IshValue::String(ref s) => {
+                        match method_name.as_str() {
+                            "Substring" => {
+                                let start = match eval_args.get(0) { Some(IshValue::Int(i)) => *i as usize, _ => 0 };
+                                let count = match eval_args.get(1) { Some(IshValue::Int(i)) => *i as usize, _ => s.chars().count() - start };
+                                self.return_value = Some(IshValue::String(s.chars().skip(start).take(count).collect()));
+                                return Ok(true);
+                            }
+                            "IndexOf" => {
+                                let search = match eval_args.get(0) {
+                                    Some(IshValue::String(val)) => val.clone(),
+                                    Some(IshValue::Char(c)) => c.to_string(),
+                                    _ => "".to_string()
+                                };
+                                let index = s.find(&search).map(|byte_idx| s[..byte_idx].chars().count() as i32).unwrap_or(-1);
+                                self.return_value = Some(IshValue::Int(index));
+                                return Ok(true);
+                            }
+                            "Contains" => {
+                                let search = match eval_args.get(0) {
+                                    Some(IshValue::String(val)) => val.clone(),
+                                    Some(IshValue::Char(c)) => c.to_string(),
+                                    _ => "".to_string()
+                                };
+                                self.return_value = Some(IshValue::Bool(s.contains(&search)));
+                                return Ok(true);
+                            }
+                            "ToLower" => {
+                                self.return_value = Some(IshValue::String(s.to_lowercase()));
+                                return Ok(true);
+                            }
+                            "ToUpper" => {
+                                self.return_value = Some(IshValue::String(s.to_uppercase()));
+                                return Ok(true);
+                            }
+                            "Trim" => {
+                                self.return_value = Some(IshValue::String(s.trim().to_string()));
+                                return Ok(true);
+                            }
+                            "RemoveSubstring" => {
+                                let search = match eval_args.get(0) {
+                                    Some(IshValue::String(val)) => val.clone(),
+                                    Some(IshValue::Char(c)) => c.to_string(),
+                                    _ => "".to_string()
+                                };
+                                self.return_value = Some(IshValue::String(s.replace(&search, "")));
+                                return Ok(true);
+                            }
+                            "Length" => {
+                                self.return_value = Some(IshValue::Int(s.chars().count() as i32));
+                                return Ok(true);
+                            }
+                            _ => {
+                                for provider in &self.stdlib_providers {
+                                    if provider.name() == s {
+                                        match provider.execute_method(&method_name, &eval_args, &mut self.gobbler) {
+                                            Ok(output_val) => {
+                                                self.last_exit_code = 0;
+                                                self.return_value = Some(output_val);
+                                                return Ok(true);
+                                            }
+                                            Err(e) => return Err(e),
                                         }
                                     }
                                 }
-                            }
 
-                            self.variables.push(HashMap::new());
-                            self.function_bases.push(self.variables.len() - 1);
-                            if let Some(scope) = self.variables.last_mut() {
-                                for (k, v) in evaluated_params {
-                                    scope.insert(k, v);
+                                let resolved = self.registry.resolve_class_method(&s, method_name.as_str())
+                                    .map(|(c, m)| (c.clone(), m.clone()));
+
+                                if let Some((class_def_clone, method_clone)) = resolved {
+
+                                    if !method_clone.is_static {
+                                        return Err(IshError::ExecutionError(format!(
+                                            "Cannot call instance method '{}' without an object instance.", method_name
+                                        )));
+                                    }
+
+                                    Registry::check_access(&method_clone.access, self.current_class.as_deref(), &class_def_clone.qualified_name)?;
+
+                                    let mut evaluated_params = Vec::new();
+                                    let mut arg_idx = 0;
+                                    for param in &method_clone.params {
+                                        if param.is_variadic {
+                                            let mut variadic_arr = Vec::new();
+                                            while arg_idx < eval_args.len() {
+                                                variadic_arr.push(eval_args[arg_idx].clone());
+                                                arg_idx += 1;
+                                            }
+                                            let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(variadic_arr));
+                                            evaluated_params.push((param.name.clone(), IshValue::Reference(arr_ref)));
+                                        } else {
+                                            if arg_idx < eval_args.len() {
+                                                evaluated_params.push((param.name.clone(), eval_args[arg_idx].clone()));
+                                                arg_idx += 1;
+                                            } else {
+                                                if let Some(default_expr) = &param.default_value {
+                                                    let val = self.evaluate_node(default_expr, jobs)?;
+                                                    evaluated_params.push((param.name.clone(), val));
+                                                } else {
+                                                    evaluated_params.push((param.name.clone(), IshValue::Null));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    self.variables.push(HashMap::new());
+                                    self.function_bases.push(self.variables.len() - 1);
+                                    if let Some(scope) = self.variables.last_mut() {
+                                        for (k, v) in evaluated_params {
+                                            scope.insert(k, v);
+                                        }
+                                    }
+
+                                    let prev_class = self.current_class.clone();
+                                    self.current_class = Some(class_def_clone.qualified_name.clone());
+                                    let mut success = true;
+                                    let mut ret_val: Option<IshValue> = None;
+                                    for stmt in &method_clone.body {
+                                        success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                                        if self.returning { break; }
+                                    }
+
+                                    let ret_val = self.return_value.take();
+                                    self.returning = false;
+                                    self.function_bases.pop();
+                                    let _ = self.pop_scope(jobs);
+
+                                    self.current_class = prev_class;
+
+                                    if let Some(val) = ret_val {
+                                        self.return_value = Some(val);
+                                    }
+
+                                    self.last_exit_code = if success { 0 } else { 1 };
+                                    return Ok(success)
+                                } else {
+                                    Err(IshError::ExecutionError(format!(
+                                        "Cannot call method '{}' on non-object value '{}'.", method_name, s
+                                    )))
                                 }
                             }
-
-                            let prev_class = self.current_class.clone();
-                            self.current_class = Some(class_def_clone.qualified_name.clone());
-                            let mut success = true;
-                            let mut ret_val: Option<IshValue> = None;
-                            for stmt in &method_clone.body {
-                                success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
-                                if self.returning { break; }
-                            }
-
-                            let ret_val = self.return_value.take();
-                            self.returning = false;
-                            self.function_bases.pop();
-                            let _ = self.pop_scope(jobs);
-
-                            self.current_class = prev_class;
-
-                            if let Some(val) = ret_val {
-                                self.return_value = Some(val);
-                            }
-
-                            self.last_exit_code = if success { 0 } else { 1 };
-                            Ok(success)
-                        } else {
-                            Err(IshError::ExecutionError(format!(
-                                "Cannot call method '{}' on non-object value '{}'.", method_name, s
-                            )))
                         }
                     }
+
+                    IshValue::Char(c) => {
+                        match method_name.as_str() {
+                            "IsLetter" => {
+                                self.return_value = Some(IshValue::Bool(c.is_alphabetic()));
+                                return Ok(true);
+                            }
+                            "IsDigit" => {
+                                self.return_value = Some(IshValue::Bool(c.is_ascii_digit()));
+                                return Ok(true);
+                            }
+                            "IsWhiteSpace" => {
+                                self.return_value = Some(IshValue::Bool(c.is_whitespace()));
+                                return Ok(true);
+                            }
+                            "IsAlnum" | "IsLetterOrDigit" => {
+                                self.return_value = Some(IshValue::Bool(c.is_alphanumeric()));
+                                return Ok(true);
+                            }
+                            "ToLower" => {
+                                self.return_value = Some(IshValue::Char(c.to_lowercase().next().unwrap_or(c)));
+                                return Ok(true);
+                            }
+                            "ToUpper" => {
+                                self.return_value = Some(IshValue::Char(c.to_uppercase().next().unwrap_or(c)));
+                                return Ok(true);
+                            }
+                            _ => return Err(IshError::ExecutionError(format!("Char has no method '{}'", method_name))),
+                        }
+                    }
+
                     _ => {
                         Err(IshError::ExecutionError(format!(
                             "Cannot call method '{}' on non-object value '{}'.", method_name, obj_val.to_string()
                         )))
                     }
                 }
-            }
+            } // Closes AstNodeKind::MethodCall
 
-            AstNodeKind::EnumDecl { .. } => Ok(true),
-            AstNodeKind::WithImport { .. } => Ok(true),
+            AstNodeKind::EnumDecl { .. } => return Ok(true),
+            AstNodeKind::WithImport { .. } => return Ok(true),
         }
     }
 }

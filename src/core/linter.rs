@@ -232,6 +232,9 @@ impl Linter {
             AstNodeKind::StringLiteral(s) => {
                 self.check_variables_in_string(s, node.line, node.column)?;
             }
+
+            AstNodeKind::CharLiteral(_) => {}
+
             AstNodeKind::Variable(_) => {}
             AstNodeKind::Return(inner) => {
                 fn check_invalid_return(n: &AstNode) -> Option<String> {

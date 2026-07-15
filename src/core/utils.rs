@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process;
 
 use crate::core::ast::IshValue;
-use crate::core::io::{StdinStream, StdoutStream, StderrStream, InputStream, OutputStream};
+use crate::core::io::{StdinStream, StderrStream, InputStream, OutputStream};
 use std::collections::HashMap;
 
 /// Tries to execute an internal command.
