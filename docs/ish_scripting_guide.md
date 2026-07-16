@@ -123,9 +123,10 @@ Ish is a versatile OOP language that supports a comprehensive set of built-in da
 
 ### Advanced & Generic Types
 
-- **`List<T>`**: A dynamically sized array of elements. (e.g., `List<int> numbers = new List<int>();`)
-- **`Map<K, V>`**: A key-value dictionary. (e.g., `Map<string, int> ages = new Map<string, int>();`)
-- **`Task<T>`**: Represents an asynchronous operation returning a type `T`. (e.g., `Task<string> fetchTask = ...;`)
+- **`List<T>`**: A dynamically sized array of elements. (e.g., `var numbers = new List<int>();`)
+- **`Map<K, V>`**: A key-value dictionary. (e.g., `var ages = new Map<string, int>();`)
+- **`Task<T>`**: Represents an asynchronous operation returning a type `T`. (e.g., `var fetchTask = Task.Run("FetchData");`)
+- **`Thread`**: Represents a low-level OS thread for parallel execution. (e.g., `var myThread = Thread.Start("WorkerMethod");`)
 - **`Pair`**: A simple key-value struct (often used intrinsically in Maps).
 - **Custom Classes/Structs**: You can declare variables using the name of any user-defined `class` or `struct`.
 
@@ -537,6 +538,46 @@ with App;
 ```
 
 This is not a file-path import. At startup, if you are using `ish run` with a `project.ic`, Ish recursively scans every `.ish` file specified in your `Include` array (or the current directory by default), finds whichever file(s) declare `namespace App { ... }`, and merges their classes/structs/enums/functions into your program. If no file in the project declares the named namespace, Ish reports an error at runtime.
+
+---
+
+## Concurrency & Multi-Threading
+
+Ish provides first-class support for both high-level asynchronous programming and low-level parallel multi-threading. Under the hood, Ish utilizes an **Isolate Architecture**, meaning each task or thread runs with its own isolated Executor and Gobbler (Memory Manager) to guarantee thread safety without locks.
+
+### Asynchronous Tasks (`Task`)
+Tasks are lightweight, non-blocking asynchronous operations. You can define an asynchronous function using the `async func` keyword and await its result using the `await` keyword.
+
+```csharp
+public static async func FetchData() {
+    CommandLine.OutputLine("Fetching data...");
+    Task.Delay(1000); // Non-blocking delay
+    return "Data Payload";
+}
+
+public static func Main(params string[] args) {
+    var myTask = Task.Run("FetchData");
+    var result = await myTask;
+    CommandLine.OutputLine(result);
+}
+```
+
+### OS-Level Threads (`Thread`)
+When you need raw CPU parallelism, Ish exposes OS-level threads. Threads are blocking and run entirely in parallel.
+
+```csharp
+public static func Worker() {
+    CommandLine.OutputLine($"Worker running on Thread ID: {Thread.CurrentThreadId()}");
+    Thread.Sleep(2000); // Blocking OS sleep
+    return "Worker Complete";
+}
+
+public static func Main(params string[] args) {
+    var myThread = Thread.Start("Worker");
+    var result = Thread.Join(myThread); // Block until thread completes
+    CommandLine.OutputLine(result);
+}
+```
 
 ---
 
