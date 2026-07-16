@@ -24,10 +24,11 @@ pub struct Executor {
     pub current_class: Option<String>,
     pub gobbler: Gobbler,
     pub is_evaluating: bool,
+    pub config: crate::core::config::IshConfig,
 }
 
 impl Executor {
-    pub fn new(script_args: Vec<String>) -> Self {
+    pub fn new(script_args: Vec<String>, config: crate::core::config::IshConfig) -> Self {
         Self { 
             script_args, 
             last_exit_code: 0,
@@ -44,6 +45,7 @@ impl Executor {
             current_class: None,
             gobbler: Gobbler::new(),
             is_evaluating: false,
+            config,
         }
     }
 
@@ -468,7 +470,7 @@ impl Executor {
                 }
 
                 // Allow class names and stdlib providers to be used as string values
-                if self.registry.classes.contains_key(var_name) || self.registry.structs.contains_key(var_name) || self.registry.enums.contains_key(var_name) || var_name == "CommandLine" || var_name == "Math" || var_name == "Str" || var_name == "Time" || var_name == "Net" || var_name == "OS" || var_name == "ExtProc" || var_name == "FS" {
+                if self.registry.resolve_class(var_name).is_some() || self.registry.resolve_struct(var_name).is_some() || self.registry.enums.contains_key(var_name) || var_name == "CommandLine" || var_name == "Math" || var_name == "Str" || var_name == "Time" || var_name == "Net" || var_name == "OS" || var_name == "ExtProc" || var_name == "FS" {
                     return Ok(IshValue::String(var_name.clone()));
                 }
 
@@ -787,8 +789,7 @@ impl Executor {
         }
     }
 
-    pub fn execute(&mut self, ast: &AstNode, jobs: &mut JobController) -> Result<bool, IshError> 
-    {
+    pub fn execute(&mut self, ast: &AstNode, enforce_entry_point: bool, jobs: &mut JobController) -> Result<bool, IshError> {
         // First pass: register all OOP declarations (namespaces, classes, structs)
         self.registry.register_declarations(ast)?;
 
@@ -821,65 +822,67 @@ impl Executor {
             }
         }
 
-        // Enforce OOP requirement
-        match self.registry.find_entry_point() {
-            Ok(program_class_name) => {
-                // First, execute all declarations so methods get registered in self.functions
-                self.execute_node_with_input(ast, "", None, jobs)?;
-                
-                // Now invoke Program::Main
-                let class_def = self.registry.classes.get(&program_class_name).cloned()
-                    .ok_or_else(|| IshError::ExecutionError(
-                        "Internal error: Program class disappeared after registration.".to_string()
-                    ))?;
-                    
-                let main_method = class_def.methods.get("Main")
-                    .ok_or_else(|| IshError::ExecutionError(
-                        "Internal error: Main method disappeared after registration.".to_string()
-                    ))?;
-                    
-                if !main_method.is_static {
-                    return Err(IshError::ExecutionError("Main method must be static.".to_string()));
-                }
-                
-                // Execute Main method body
-                self.current_class = Some("Program".to_string());
-                self.variables.push(HashMap::new());
-                self.function_bases.push(self.variables.len() - 1);
-                
-                // Add args
-                let mut arg_list = Vec::new();
-                for arg in &self.script_args {
-                    arg_list.push(IshValue::String(arg.clone()));
-                }
-                let args_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(arg_list));
-                if let Some(scope) = self.variables.last_mut() {
-                    scope.insert("args".to_string(), IshValue::Reference(args_ref));
-                }
+        // Execute all declarations so methods get registered in self.functions
+        self.execute_node_with_input(ast, "", None, jobs)?;
 
-                let _last_output = String::new();
-                for stmt in &main_method.body {
-                    self.execute_node_with_input(stmt, "", None, jobs)?;
-                    if self.returning { break; }
+        if enforce_entry_point {
+            match self.registry.find_entry_point(
+                &self.config.project.entry_class,
+                &self.config.project.entry_method,
+                self.config.project.with_args,
+            ) {
+                Ok(program_class_name) => {
+                    let class_def = self.registry.classes.get(&program_class_name).cloned()
+                        .ok_or_else(|| IshError::ExecutionError(
+                            "Internal error: Entry class disappeared after registration.".to_string()
+                        ))?;
+                        
+                    let main_method = class_def.methods.get(&self.config.project.entry_method)
+                        .ok_or_else(|| IshError::ExecutionError(
+                            "Internal error: Entry method disappeared after registration.".to_string()
+                        ))?;
+                        
+                    // Execute Main method body
+                    self.current_class = Some(program_class_name);
+                    self.variables.push(HashMap::new());
+                    self.function_bases.push(self.variables.len() - 1);
+                    
+                    if self.config.project.with_args {
+                        let mut arg_list = Vec::new();
+                        for arg in &self.script_args {
+                            arg_list.push(IshValue::String(arg.clone()));
+                        }
+                        let args_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(arg_list));
+                        if let Some(scope) = self.variables.last_mut() {
+                            scope.insert("args".to_string(), IshValue::Reference(args_ref));
+                        }
+                    }
+
+                    let _last_output = String::new();
+                    for stmt in &main_method.body {
+                        self.execute_node_with_input(stmt, "", None, jobs)?;
+                        if self.returning { break; }
+                    }
+                    
+                    let ret_val = self.return_value.take();
+                    
+                    self.returning = false;
+                    self.function_bases.pop();
+                    let _ = self.pop_scope(jobs);
+                    self.current_class = None;
+                    
+                    if let Some(IshValue::Int(code)) = ret_val {
+                        if code != 0 {
+                            self.last_exit_code = code as i32;
+                            return Ok(false);
+                        }
+                    }
+                    return Ok(true);
                 }
-                
-                let ret_val = self.return_value.take();
-                
-                self.returning = false;
-                self.function_bases.pop();
-                let _ = self.pop_scope(jobs);
-                self.current_class = None;
-                
-                if let Some(IshValue::Int(code)) = ret_val {
-                    self.last_exit_code = code;
-                }
-                
-                return Ok(true);
-            }
-            Err(e) => {
-                Err(e)
+                Err(e) => return Err(e),
             }
         }
+        Ok(true)
     }
 
     pub fn resolve_callable(&self, program: &str) -> Option<(Vec<crate::core::ast::Param>, Vec<AstNode>)> {
@@ -924,6 +927,9 @@ impl Executor {
             AstNodeKind::Assignment { type_specifier, variable, index, value, is_declaration } => {
                 let val = match &value.kind {
                     AstNodeKind::Array(items) => {
+                        if items.len() > self.config.interpreter.array_size_limit {
+                            return Err(IshError::ExecutionError(format!("Array-Size-Limit ({}) exceeded!", self.config.interpreter.array_size_limit)));
+                        }
                         let mut arr = Vec::new();
                         for item in items {
                             arr.push(self.evaluate_node(item, jobs)?);
@@ -932,6 +938,9 @@ impl Executor {
                         IshValue::Reference(arr_ref)
                     }
                     AstNodeKind::Map(items) => {
+                        if items.len() > self.config.interpreter.map_size_limit {
+                            return Err(IshError::ExecutionError(format!("Map-Size-Limit ({}) exceeded!", self.config.interpreter.map_size_limit)));
+                        }
                         let mut m = HashMap::new();
                         for (k, v) in items {
                             m.insert(k.clone(), self.evaluate_node(v, jobs)?);
@@ -980,6 +989,10 @@ impl Executor {
                 }
 
                 if *is_declaration {
+                    let total_vars: usize = self.variables.iter().map(|s| s.len()).sum();
+                    if total_vars >= self.config.interpreter.max_variables {
+                        return Err(IshError::ExecutionError(format!("Max-variables limit ({}) exceeded!", self.config.interpreter.max_variables)));
+                    }
                     if let Some(scope) = self.variables.last_mut() {
                         scope.insert(variable.clone(), val);
                     }
@@ -1389,6 +1402,9 @@ impl Executor {
                             list_elements.push(self.evaluate_node(node, jobs)?);
                         }
                     }
+                    if list_elements.len() > self.config.interpreter.list_size_limit {
+                        return Err(IshError::ExecutionError(format!("List size limit ({}) exceeded!", self.config.interpreter.list_size_limit)));
+                    }
                     let list_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::List(list_elements));
                     self.return_value = Some(IshValue::Reference(list_ref));
                     return Ok(true);
@@ -1410,6 +1426,9 @@ impl Executor {
                                 return Err(IshError::ExecutionError("Map initializer must contain key-value pairs".to_string()));
                             }
                         }
+                    }
+                    if map_elements.len() > self.config.interpreter.map_size_limit {
+                        return Err(IshError::ExecutionError(format!("Map size limit ({}) exceeded!", self.config.interpreter.map_size_limit)));
                     }
                     let map_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Map(map_elements));
                     self.return_value = Some(IshValue::Reference(map_ref));
@@ -1573,6 +1592,19 @@ impl Executor {
                 
                 if let IshValue::String(ref s) = obj_val {
                     if s == "___implicit___" {
+                        if method_name == "dotenv" {
+                            let mut eval_args = Vec::new();
+                            for arg_node in args {
+                                eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                            }
+                            if eval_args.is_empty() { return Err(IshError::ExecutionError("dotenv requires 1 argument".into())); }
+                            let var_name = eval_args[0].to_string();
+                            let val = dotenvy::var(&var_name).unwrap_or_else(|_| "".to_string());
+                            self.return_value = Some(IshValue::String(val));
+                            self.last_exit_code = 0;
+                            return Ok(true);
+                        }
+
                         let mut has_this = false;
                         for scope in self.variables.iter().rev() {
                             if let Some(t) = scope.get("this") {

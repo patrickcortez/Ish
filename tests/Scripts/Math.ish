@@ -1,0 +1,7 @@
+namespace Scripts {
+    public static class MathLib {
+        public static func Add(int a,int b) {
+            return a + b;
+        }
+    }
+}

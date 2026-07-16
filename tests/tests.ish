@@ -1,0 +1,44 @@
+with Scripts;
+
+namespace Tests {
+    public static class Program {
+        public static func Main(params string[] args) {
+            var my_var = dotenv("MY_SECRET");
+            CommandLine.OutputLine($"Loaded from .env: {my_var}");
+
+            var sum = MathLib.Add(25, 25);
+            CommandLine.OutputLine($"MathLib.Add(25, 25) = {sum}");
+
+            try {
+                var big_map = new Map<string, int>() {{"a": 1}, {"b": 2}, {"c": 3}, {"d": 4}, {"e": 5}, {"f": 6}};
+                CommandLine.OutputLine("FAILED: Map size limit not enforced!");
+            } catch e {
+                CommandLine.OutputLine($"SUCCESS: Map size limit enforced ({e})");
+            }
+
+            try {
+                var big_array = new List<int>() {1, 2, 3, 4, 5, 6};
+                CommandLine.OutputLine("FAILED: Array size limit not enforced!");
+            } catch e {
+                CommandLine.OutputLine($"SUCCESS: Array size limit enforced ({e})");
+            }
+
+            try {
+                var v1 = 1;
+                var v2 = 2;
+                var v3 = 3;
+                var v4 = 4;
+                var v5 = 5;
+                var v6 = 6;
+                var v7 = 7;
+                var v8 = 8;
+                var v9 = 9;
+                var v10 = 10;
+                var v11 = 11;
+                CommandLine.OutputLine("FAILED: Max variables not enforced!");
+            } catch e {
+                CommandLine.OutputLine($"SUCCESS: Max variables enforced ({e})");
+            }
+        }
+    }
+}

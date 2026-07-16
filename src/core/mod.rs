@@ -9,3 +9,5 @@ pub mod utils;
 pub mod stdlib;
 pub mod gobbler;
 pub mod io;
+pub mod memory;
+pub mod config;

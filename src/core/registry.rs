@@ -390,9 +390,9 @@ AstNodeKind::WithImport { path } => {
         None
     }
 
-    pub fn find_entry_point(&self) -> Result<String, IshError> {
+    pub fn find_entry_point(&self, entry_class: &str, entry_method: &str, with_args: bool) -> Result<String, IshError> {
         for (qn, cls) in &self.classes {
-            if cls.name == "Program" {
+            if cls.name == entry_class {
                 if !cls.is_static {
                     return Err(IshError::ParseError(format!(
                         "Entry point class '{}' must be declared as 'static'.", qn
@@ -405,34 +405,34 @@ AstNodeKind::WithImport { path } => {
                         "Entry point class '{}' must be declared as 'public'.", qn
                     )));
                 }
-                if let Some(main_method) = cls.methods.get("Main") {
-                    if !main_method.is_static {
+                if let Some(method) = cls.methods.get(entry_method) {
+                    if !method.is_static {
                         return Err(IshError::ParseError(
-                            "Entry point method 'Main' must be declared as 'static'.".to_string()
+                            format!("Entry point method '{}' must be declared as 'static'.", entry_method)
                         ));
                     }
-                    if !matches!(main_method.access, AccessSpecifier::Public) {
+                    if !matches!(method.access, AccessSpecifier::Public) {
                         return Err(IshError::ParseError(
-                            "Entry point method 'Main' must be declared as 'public'.".to_string()
+                            format!("Entry point method '{}' must be declared as 'public'.", entry_method)
                         ));
                     }
 
-                    if !main_method.params.last().map_or(false, |p| p.is_variadic && p.type_specifier.as_deref() == Some("string[]")) {
-                        return Err(IshError::ParseError(
-                            "Entry point method 'Main' must have the 'params string[] args' signature.".to_string()
-                        ));
+                    if with_args {
+                        if !method.params.last().map_or(false, |p| p.is_variadic && p.type_specifier.as_deref() == Some("string[]")) {
+                            return Err(IshError::ParseError(
+                                format!("Entry point method '{}' must have the 'params string[] args' signature.", entry_method)
+                            ));
+                        }
                     }
                     return Ok(qn.clone());
                 } else {
                     return Err(IshError::ParseError(format!(
-                        "Entry point class '{}' must contain a 'public static func Main(params string[] args)' method.", qn
+                        "Entry point class '{}' must contain a 'public static func {}' method.", qn, entry_method
                     )));
                 }
             }
         }
-        Err(IshError::ParseError(
-            "No entry point found. Scripts must contain a 'public static class Program' with a 'public static func Main(params string[] args)' method.".to_string()
-        ))
+        Err(IshError::ParseError(format!("Entry point class '{}' not found.", entry_class)))
     }
 
     pub fn check_access(access: &AccessSpecifier, caller_class: Option<&str>, target_class: &str) -> Result<(), IshError> {

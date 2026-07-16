@@ -1,0 +1,20 @@
+[Project]
+Name: "IshTest";
+Version: "1.0.0";
+Author: "Tester";
+Entry-File: "tests.ish";
+Entry-Class: "Program";
+Entry-Method: "Main";
+With-Args: true;
+Verbose: true;
+DotEnv: true;
+
+Include:
+    - "Scripts/**";
+
+[Configuration]
+Max-Memory-Threshold: 100;
+Max-variables: 10;
+Array-Size-Limit: 5;
+List-Size-Limit: 5;
+Map-Size-Limit: 5;
