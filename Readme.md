@@ -24,14 +24,15 @@
 
 **Ish** brings a robust, modern feature set for developers:
 
-- **Object-Oriented Architecture**: Ish scripts are structurally organized using `namespace`, `class`, and `struct`. 
+- **Object-Oriented Architecture**: Ish scripts are structurally organized using `namespace`, `class`, and `struct`, including constructors and destructors (`func ClassName(...)` / `func ~ClassName()`).
 - **Inheritance & Static Methods**: Natively supports deep class inheritance (`class Dog : Animal`) and static execution chains.
-- **Strict Typing & Generics**: Supports built-in Generics (`List<T>`) for strongly-typed instantiation.
-- **Robust Syntax**: Implements clean language constructs, strict parenthesis `()` enforcement, and natively evaluates complex math dynamically without string hacks.
+- **Strict Typing & Generics**: Supports built-in Generics (`List<T>`) for strongly-typed instantiation, plus `enum` types.
+- **Characters & Mutable Strings**: A dedicated `char` type (single-quoted literals like `'a'`) and string instance methods, including in-place mutation via `.Append()`, `.AppendTo()`, and `.Clear()`.
+- **Robust Syntax**: Implements clean language constructs, strict parenthesis `()` enforcement, a ternary operator (`cond ? a : b`), `try`/`catch` error handling, and natively evaluates complex math dynamically without string hacks.
 - **Advanced Control Flow**: Supports nested `if/elif/else`, `switch/case` statements, and iterative loops (`for`, `while`, `foreach`).
 - **Memory Management**: Includes a fully automatic Memory Management System (MMS) called **The Gobbler** which utilizes rigorous Mark-and-Sweep algorithms to safely unallocate memory without manual intervention.
 - **Location-Aware Linter**: Includes an advanced Linter that will pinpoint exactly which line and column a syntax error occurred on, making script debugging entirely seamless.
-- **Program Entry Point**: Enforces strict execution architecture by requiring every `.ish` script to contain a `public static class Program { public static func main() }` entry point.
+- **Program Entry Point**: Enforces strict execution architecture by requiring every `.ish` script to contain a `public static class Program { public static func Main(params string[] args) { ... } }` entry point. Note the capital `Main` and the required `params string[] args` signature — the interpreter rejects any other entry point shape.
 
 ---
 

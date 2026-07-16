@@ -1,137 +1,177 @@
 # Standard Libraries
 
-The Standard Libraries in Ish provide cross-platform functionality built directly into the interpreter. These commands return structured JSON-compatible data (like `IshValue::Array` or `IshValue::String`) seamlessly mapping to the native variable system.
+The Standard Libraries in Ish provide cross-platform functionality built directly into the interpreter, exposed as static-style method calls on built-in provider names (e.g. `Str.ToLower(...)`, `FS.Exists(...)`) — the same call syntax used for your own classes' static methods. They return native `IshValue` types (`String`, `Int`, `Bool`, `Array`/`List` references, etc.) that map directly into Ish variables.
+
+> **Note:** earlier versions of this document described these as `snake_case` shell-style commands (e.g. `fs_readfile`, `str_tolower`) invoked bash-style. That syntax no longer exists — Ish is a compiled OOP language now (see the [Scripting Guide](/docs/ish_scripting_guide.md)), and every standard library is called as `ModuleName.Method(args)`.
 
 ## Table of Contents
-- [File System I/O (IshFS)](#file-system-io)
-- [Networking (IshNet)](#networking)
-- [String Utilities (IshStr)](#string-utils)
-- [Date and Time (IshTime)](#date-and-time)
-- [Machine (IshOS)](#machine)
-- [User Libraries](#user-libraries)
+- [CommandLine I/O (CommandLine)](#commandline-io)
+- [File System I/O (FS)](#file-system-io)
+- [Networking (Net)](#networking)
+- [String Utilities (Str)](#string-utilities)
+- [Math (Math)](#math)
+- [Date and Time (Time)](#date-and-time)
+- [Machine / OS (OS)](#machine--os)
+- [External Processes (ExtProc)](#external-processes)
+- [Namespaces & Imports](#namespaces--imports)
+
+---
+
+## CommandLine I/O
+Name: **CommandLine**
+
+The primary way to read from and write to the terminal.
+
+| Method | Arguments | Description | Returns |
+|---|---|---|---|
+| `OutputLine` | `[value]` | Writes a value followed by a newline. Writes a blank line if called with no args. | `null` |
+| `Output` | `<value>` | Writes a value with no trailing newline. | `null` |
+| `Input` | None | Reads a full line from stdin. | `string` |
+| `Read` | None | Reads a single keypress from stdin. | `string` |
+| `ForeColor` | `<color>` | Sets the terminal foreground color. Accepts a name (`red`, `green`, `blue`, `black`, `yellow`, `magenta`, `cyan`, `white`) or a hex string. | `null` |
+| `BackColor` | `<color>` | Sets the terminal background color. Same accepted values as `ForeColor`. | `null` |
+| `ResetColor` | None | Resets terminal colors to default. | `null` |
+
+```csharp
+CommandLine.OutputLine("Hello, world!");
+let name = CommandLine.Input();
+```
 
 ---
 
 ## File System I/O
-Name: **IshFS**
+Name: **FS**
 
-| Command | Arguments | Description | Returns |
+| Method | Arguments | Description | Returns |
 |---|---|---|---|
-| `fs_readfile` | `<path>` | Reads a file line by line. | Array of Strings |
-| `fs_writefile` | `<path> <data> [append]` | Writes data to a file. Append is true by default. | Exit Code |
-| `fs_createfile` | `<path>` | Creates an empty file. | Exit Code |
-| `fs_deletefile` | `<path>` | Deletes a file. | Exit Code |
-| `fs_exists` | `<path>` | Checks if a file or directory exists. | Boolean (True/False) |
-| `fs_createdir` | `<path>` | Creates a directory. | Exit Code |
-| `fs_deletedir` | `<path>` | Deletes a directory. | Exit Code |
-| `fs_list` | `<path>` | Lists contents of a directory. | Array of Strings |
-| `fs_copy` | `<src> <dest>` | Copies a file or folder. | Exit Code |
-| `fs_move` | `<src> <dest>` | Moves or renames a file or folder. | Exit Code |
-| `fs_getfileperm`| `<path>` | Gets file permissions in octal format. | String |
-| `fs_getdirperm` | `<path>` | Gets directory permissions in octal format.| String |
+| `Exists` | `<path>` | Checks whether a file or directory exists. | `bool` |
+| `ReadAllLines` | `<path>` | Reads a file, one entry per line. | Array of `string` |
+| `ReadAllText` | `<path>` | Reads an entire file as a single string. | `string` |
+| `WriteAllText` | `<path> <data> [append]` | Writes `data` to a file. `append` (bool) defaults to `false` (overwrite). | `bool` |
+| `List` | `<path>` | Lists the contents of a directory. | Array of `string` |
+
+> **Note:** earlier documentation additionally listed `fs_createfile`, `fs_deletefile`, `fs_createdir`, `fs_deletedir`, `fs_copy`, `fs_move`, `fs_getfileperm`, and `fs_getdirperm`. Those do not currently exist as `FS` methods — if you need them, use [`ExtProc`](#external-processes) to shell out to the OS in the meantime.
+
+```csharp
+if (FS.Exists("data.txt")) {
+    let content = FS.ReadAllText("data.txt");
+    CommandLine.OutputLine(content);
+}
+```
 
 ---
 
 ## Networking
-Name: **IshNet**
+Name: **Net**
 
-| Command | Arguments | Description | Returns |
+| Method | Arguments | Description | Returns |
 |---|---|---|---|
-| `net_isavailable` | None | Checks if internet is available. | Exit Code (0=Yes, 1=No)|
-| `net_ssid` | None | Returns the SSID of the current network. | String |
-| `net_ip` | None | Returns IP addresses of the current network. | Array of Strings |
-| `net_ping` | `<host>` | Pings a host (domain or IP). | Exit Code (0=Yes, 1=No)|
-| `net_get` | `<url> [headers]` | Sends HTTP GET request. | String (Response Body)|
-| `net_post` | `<url> <data> [headers]`| Sends HTTP POST request. | String (Response Body)|
-| `net_resolve` | `<domain>` | Resolves a domain to an IP address. | String |
-| `net_getsecure` | `<url> [headers]` | Identical to `net_get` but strictly HTTPS. | String |
+| `Get` | `<url>` | Sends an HTTP GET request. | `string` |
+| `Post` | `<url> <data>` | Sends an HTTP POST request. | `string` |
+| `Download` | — | Downloads a resource. | `bool` |
+
+> **Status:** as of the current build, `Net.Get` and `Net.Post` are stubs that return a placeholder "not implemented natively yet" string, and `Net.Download` always returns `false`. Earlier documentation described these as fully functional (including a separate `net_getsecure`, `net_ping`, `net_ssid`, `net_ip`, and `net_resolve`, none of which currently exist). Treat `Net` as unimplemented for now — this section will need another pass once networking lands for real.
 
 ---
 
-## String Utils
-Name: **IshStr**
+## String Utilities
+Name: **Str**
 
-| Command | Arguments | Description | Returns |
+Static, module-style string helpers. Every string value also exposes an equivalent set of instance methods directly (e.g. `myStr.ToUpper()`) plus in-place mutation methods (`.Append()`, `.Clear()`) — see the [Scripting Guide](/docs/ish_scripting_guide.md#strings--characters) for those and for the newer `char` type.
+
+| Method | Arguments | Description | Returns |
 |---|---|---|---|
-| `str_tolower` | `<string>` | Converts string to lowercase. | String |
-| `str_toupper` | `<string>` | Converts string to uppercase. | String |
-| `str_substr` | `<string> <start> [end]`| Returns a substring from index `start` to `end`. | String |
-| `str_join` | `<array> <separator>` | Joins an array of strings into a single string. | String |
-| `str_split` | `<string> <separator>` | Splits a string using the separator. | Array of Strings |
-| `str_replace` | `<string> <old> <new>` | Replaces all occurrences of `old` with `new`. | String |
-| `str_contains` | `<string> <sub_str>`| Checks if string contains the substring. | Boolean |
-| `str_find` | `<string> <sub_str>`| Returns index of first occurrence. | Integer |
-| `str_len` | `<string>` | Returns the length of the string. | Integer |
-| `str_reverse` | `<string>` | Reverses the string. | String |
-| `str_trim` | `<string>` | Trims whitespace from both ends. | String |
+| `ToLower` | `<string>` | Converts to lowercase. | `string` |
+| `ToUpper` | `<string>` | Converts to uppercase. | `string` |
+| `Reverse` | `<string>` | Reverses the string. | `string` |
+| `Trim` | `<string>` | Trims whitespace from both ends. | `string` |
+| `TrimStart` | `<string>` | Trims leading whitespace. | `string` |
+| `TrimEnd` | `<string>` | Trims trailing whitespace. | `string` |
+| `Length` | `<string>` | Returns the length of the string. | `int` |
+| `Contains` | `<string> <sub>` | Checks whether `string` contains `sub`. | `bool` |
+| `IndexOf` | `<string> <sub>` | Index of first occurrence of `sub`, or `-1`. | `int` |
+| `Substring` | `<string> <start> [end]` | Substring from index `start` to `end` (exclusive). | `string` |
+| `Join` | `<array> <separator>` | Joins an array of strings with `separator`. | `string` |
+| `Split` | `<string> <separator>` | Splits a string on `separator`. | Array of `string` |
+| `Replace` | `<string> <old> <new>` | Replaces all occurrences of `old` with `new`. | `string` |
+
+> **Note:** `Str.Substring(string, start, end)` takes an *end index*, whereas the newer instance method `str.Substring(start, count)` takes a *length* — they are not interchangeable. `str_find` and `str_len` from earlier documentation are now `IndexOf` and `Length` respectively.
+
+```csharp
+let shout = Str.ToUpper("hello");
+CommandLine.OutputLine(shout); // HELLO
+```
+
+---
+
+## Math
+Name: **Math**
+
+| Method | Arguments | Description | Returns |
+|---|---|---|---|
+| `Abs` | `<n>` | Absolute value. | `float` |
+| `Ceiling` | `<n>` | Rounds up. | `float` |
+| `Floor` | `<n>` | Rounds down. | `float` |
+| `Round` | `<n>` | Rounds to nearest integer. | `float` |
+| `Pow` | `<n> <exp>` | Raises `n` to the power `exp`. | `float` |
+| `Min` | `<a> <b>` | Smaller of the two values. | `float` |
+| `Max` | `<a> <b>` | Larger of the two values. | `float` |
+| `Sqrt` | `<n>` | Square root. | `float` |
+
+All `Math` results are returned as `float`, even for integer-looking inputs.
+
+```csharp
+let area = Math.Round(Math.Pow(radius, 2) * 3.14159);
+```
 
 ---
 
 ## Date and Time
-Name: **IshTime**
+Name: **Time**
 
-| Command | Arguments | Description | Returns |
+| Method | Arguments | Description | Returns |
 |---|---|---|---|
-| `time_now` | None | Returns the current date and time. | String |
-| `time_unix` | None | Returns the current unix time. | Integer |
-| `time_format` | `<timestamp> <format>` | Formats a unix timestamp or RFC3339 string. | String |
-| `time_parse` | `<string> <format>`| Parses a date string into a unix timestamp. | Integer |
+| `Now` | None | Current Unix timestamp (seconds). | `int` |
+| `Unix` | None | Alias for `Now`. | `int` |
+| `Format` | `<value>` | Formats a value. | `string` |
+
+> **Status:** `Time.Format` is currently a stub that returns `"Formatted: <value>"` rather than performing real date formatting, and there is no `Time.Parse`. Earlier documentation described a fully working `time_format`/`time_parse` pair with format-string support — that hasn't landed yet.
 
 ---
 
-## Machine
-Name: **IshOS**
+## Machine / OS
+Name: **OS**
 
-| Command | Arguments | Description | Returns |
+| Method | Arguments | Description | Returns |
 |---|---|---|---|
-| `os_hostname` | None | Gets the machine hostname. | String |
-| `os_os` | None | Gets the operating system name. | String |
-| `os_arch` | None | Gets the CPU architecture. | String |
-| `os_getenvvars` | None | Lists all environment variables. | Array of Strings |
-| `os_getenvvar`| `<name>` | Gets the value of an environment variable. | String |
-| `os_setenvvar`| `<name> <value>` | Sets an environment variable. | Exit Code |
-| `os_platform` | None | Returns the machine platform. | String |
-| `os_version` | None | Returns the machine version. | String |
-| `os_exit` | `[code]` | Exits the shell process immediately. | Exit Code |
-| `os_sleep` | `<ms>` | Pauses execution for milliseconds. | Exit Code |
-| `os_clear` | None | Clears the terminal output. | Exit Code |
-| `os_users` | None | Returns a list of users on the machine. | Array of Strings |
+| `GetEnv` | `<name>` | Gets an environment variable's value (`null` if unset). | `string` or `null` |
+| `SetEnv` | `<name> <value>` | Sets an environment variable for the running process. | `bool` |
+| `Platform` | None | Operating system name (e.g. `linux`, `windows`, `macos`). | `string` |
+| `Arch` | None | CPU architecture (e.g. `x86_64`). | `string` |
+| `Cwd` | None | Current working directory. | `string` |
+
+> **Note:** earlier documentation additionally listed `os_hostname`, `os_getenvvars` (list all), `os_version`, `os_exit`, `os_sleep`, `os_clear`, and `os_users`. None of those currently exist as `OS` methods.
 
 ---
 
-## Usage
+## External Processes
+Name: **ExtProc**
 
-Because these are built natively into the interpreter, you simply call them like any command and capture their output using variable assignment. The returned data structures natively map to `IshValue` types (such as `Array`, `Map`, `Int`).
+New standard library module for spawning and running external programs, added alongside the IO layer rework. Not present in earlier documentation.
 
-```bash
-# Capture native strings and ints seamlessly
-let host = "$(os_hostname)"
-let len = "$(str_len $host)"
-out "Host $host is $len characters long"
+| Method | Arguments | Description | Returns |
+|---|---|---|---|
+| `Start` | `<program> [args]` | Runs `program` to completion, optionally passing an array of string arguments. | Object with `ExitCode` (`int`), `StandardOutput` (`string`), `StandardError` (`string`) |
+
+```csharp
+let[] flags = ["-la"];
+let result = ExtProc.Start("ls", flags);
+CommandLine.OutputLine(result.StandardOutput);
+CommandLine.OutputLine($"Exit code: {result.ExitCode}");
 ```
 
-## User Libraries
+---
 
-You can load your own `.ish` scripts into the current environment using the `with` keyword. This merges their function definitions (`func`) into the global scope.
+## Namespaces & Imports
 
-```bash
-# Inside sample_lib.ish
-func sample_hello() {
-    out "Hello from the library!"
-}
-
-func sample_returner(val) {
-    return $val
-}
-```
-
-```bash
-# Inside main.ish
-with sample_lib.ish
-
-func main() {
-    sample_hello
-    let x = "$(sample_returner 22)"
-    out "The value is $x"
-}
-```
+You can no longer merge another script's functions into scope by file path with `with sample_lib.ish`. Instead, `with` imports **by namespace name** — see [Namespaces & Imports](/docs/ish_scripting_guide.md#namespaces--imports) in the Scripting Guide for the current behavior and an example.
