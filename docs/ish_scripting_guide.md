@@ -398,9 +398,22 @@ This is not a file-path import. At startup, Ish recursively scans every `.ish` f
 
 ---
 
-## Memory Management
+## Memory & Thread Management
 
-Ish uses a fully automatic **Memory Management System (MMS)** called **The Gobbler**.
+Ish utilizes a robust and modern architecture to ensure scripts execute safely and efficiently.
 
-### Automatic Garbage Collection
-You never have to manually free memory in Ish. The Gobbler actively traces your variables. When an object goes out of scope, the Gobbler instantly unallocates its memory using a rigorous **Mark-and-Sweep** algorithm, invoking any destructor (`~ClassName`) defined on the object's class along the way.
+### Automatic Generational Garbage Collection
+Ish uses a fully automatic **Memory Management System (MMS)** called **The Gobbler**. 
+You never have to manually free memory in Ish. The Gobbler actively traces your variables using a highly optimized **Generational Mark-and-Sweep** algorithm:
+- **Young Heap**: New objects are allocated quickly here. Minor Garbage Collections frequently sweep short-lived objects.
+- **Old Heap**: Objects that survive multiple Minor GC sweeps are promoted here. Major Garbage Collections run less frequently to clear up large-scale memory chunks.
+
+When an object goes out of scope and is swept by the Gobbler, it instantly unallocates its memory, invoking any destructor (`~ClassName`) defined on the object's class along the way.
+
+### Memory Bounds & Recursion Limits
+To prevent runtime crashes, Ish actively tracks memory consumption and stack recursion:
+- **Recursion Limits**: Functions hitting a recursion depth of over 1000 will safely halt and throw a structured `ExecutionError` rather than crashing the underlying runtime with a Stack Overflow.
+- **Out of Memory Prevention**: If your script rapidly exceeds the configured `Max-Memory-Threshold`, the interpreter will safely unwind and throw an error to prevent system memory exhaustion.
+
+### Thread Safety (Isolate Model)
+Ish is inherently thread-safe by utilizing an **Isolate Architecture**. When multi-threading features are utilized, each thread executes in its very own isolated environment containing a distinct Executor and Gobbler instance. This ensures that memory is never dangerously shared across threads, avoiding strict runtime locks and data races.
