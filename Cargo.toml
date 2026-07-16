@@ -21,9 +21,6 @@ winreg = "0.52"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[lib]
-path = "src/lib.rs"
-
 [[bin]]
 name = "ish"
 path = "src/main.rs"

@@ -809,7 +809,35 @@ impl Executor {
         }
     }
 
-    pub fn execute(&mut self, ast: &AstNode, enforce_entry_point: bool, jobs: &mut JobController) -> Result<bool, IshError> {
+    pub fn execute(&mut self, ast: &AstNode, enforce_entry_point: bool, jobs: &mut JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<bool, IshError> {
+        if let Some(expected_ns) = expected_namespace {
+            let mut declared_namespace = None;
+            if let AstNodeKind::NamespaceDecl { name: _, body } = &ast.kind {
+                for stmt in body {
+                    if let AstNodeKind::NamespaceDecl { name, .. } = &stmt.kind {
+                        declared_namespace = Some(name.clone());
+                        break;
+                    }
+                }
+            }
+            
+            if let Some(declared) = declared_namespace {
+                if declared != expected_ns {
+                    let file_type = if is_entry_file { "Entry file" } else { "File" };
+                    return Err(IshError::ExecutionError(format!(
+                        "Strict namespace rule violation: {} expected namespace '{}', but found '{}'",
+                        file_type, expected_ns, declared
+                    )));
+                }
+            } else {
+                let file_type = if is_entry_file { "Entry file" } else { "File" };
+                return Err(IshError::ExecutionError(format!(
+                    "Strict namespace rule violation: {} is missing a namespace declaration. Expected namespace '{}'",
+                    file_type, expected_ns
+                )));
+            }
+        }
+
         // First pass: register all OOP declarations (namespaces, classes, structs)
         self.registry.register_declarations(ast)?;
 

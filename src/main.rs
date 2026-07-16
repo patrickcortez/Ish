@@ -4,7 +4,6 @@ use std::process::ExitCode;
 pub mod error;
 pub mod core;
 pub mod managers;
-pub mod compiler;
 
 #[cfg(windows)]
 use core::io::platform::enable_virtual_terminal_processing;
@@ -36,71 +35,51 @@ enum Commands {
     },
     /// Print version information
     Version,
+    /// Display information about an Ish project
     Info {
         /// Path to the project directory
         path: String,
     },
-    /// Ahead-Of-Time compile an Ish project
-    Build {
-        /// Path to the project directory
-        path: String,
-    },
 }
 
-fn validate_ast_namespace(ast: &core::ast::AstNode, primary_namespace: &str, is_entry_file: bool) -> Result<(), error::IshError> {
-    let mut declared_namespace = "";
-    if let core::ast::AstNodeKind::NamespaceDecl { name, body } = &ast.kind {
-        if name.is_empty() {
-            for child in body {
-                if let core::ast::AstNodeKind::NamespaceDecl { name: inner_name, .. } = &child.kind {
-                    declared_namespace = inner_name;
-                    break;
-                }
-            }
-        } else {
-            declared_namespace = name;
-        }
-    }
-    
-    if declared_namespace.is_empty() {
-        return Err(error::IshError::ParseError("Every file must declare a namespace at the top level.".to_string()));
-    }
-    
-    if is_entry_file {
-        if declared_namespace != primary_namespace {
-            return Err(error::IshError::ParseError(format!("Entry file namespace must be '{}', found '{}'", primary_namespace, declared_namespace)));
-        }
-    } else {
-        if declared_namespace != primary_namespace && !declared_namespace.starts_with(&format!("{}.", primary_namespace)) {
-            return Err(error::IshError::ParseError(format!("Namespace '{}' must start with primary namespace '{}.'", declared_namespace, primary_namespace)));
-        }
-    }
-    Ok(())
-}
-
-fn execute_headless_command(content: &str, executor: &mut core::executor::Executor, enforce_entry_point: bool, primary_namespace: &str, is_entry_file: bool, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
+fn execute_headless_command(content: &str, executor: &mut core::executor::Executor, enforce_entry_point: bool, jobs: &mut managers::job_controller::JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<(), error::IshError> {
     let mut lexer = core::tokenizer::Tokenizer::new(content);
     let tokens = lexer.tokenize()?;
     let mut parser = core::parser::Parser::new(tokens);
     let ast = parser.parse()?;
-    
-    // Strict namespace validation
-    validate_ast_namespace(&ast, primary_namespace, is_entry_file)?;
-
-    executor.execute(&ast, enforce_entry_point, jobs)?;
+    executor.execute(&ast, enforce_entry_point, jobs, expected_namespace, is_entry_file)?;
     Ok(())
 }
 
-fn load_all_ish_files(dir: &std::path::Path, executor: &mut core::executor::Executor, primary_namespace: &str, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
+fn load_all_ish_files(dir: &std::path::Path, project_root: &std::path::Path, primary_namespace: &str, entry_file_path: &std::path::Path, executor: &mut core::executor::Executor, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
     if dir.is_dir() {
         for entry in std::fs::read_dir(dir).map_err(|e| error::IshError::ExecutionError(e.to_string()))? {
             let entry = entry.map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
             let path = entry.path();
             if path.is_dir() {
-                load_all_ish_files(&path, executor, primary_namespace, jobs)?;
+                load_all_ish_files(&path, project_root, primary_namespace, entry_file_path, executor, jobs)?;
             } else if path.extension().map_or(false, |ext| ext == "ish") {
                 let content = std::fs::read_to_string(&path).map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
-                execute_headless_command(&content, executor, false, primary_namespace, false, jobs)?;
+                
+                let is_entry = path == entry_file_path;
+                let expected_ns = if let Ok(rel_path) = path.strip_prefix(project_root) {
+                    if let Some(parent) = rel_path.parent() {
+                        let mut ns = primary_namespace.to_string();
+                        for comp in parent.components() {
+                            if let std::path::Component::Normal(s) = comp {
+                                ns.push('.');
+                                ns.push_str(s.to_string_lossy().as_ref());
+                            }
+                        }
+                        Some(ns)
+                    } else {
+                        Some(primary_namespace.to_string())
+                    }
+                } else {
+                    None
+                };
+
+                let _ = execute_headless_command(&content, executor, false, jobs, expected_ns, is_entry); // Ignore failures in included files for now, or just let them register classes
             }
         }
     }
@@ -182,13 +161,15 @@ Map-Size-Limit: 5000;
             let mut jobs = managers::job_controller::JobController::new();
             
             let current_dir = std::env::current_dir().unwrap_or_default();
+            let entry_path = current_dir.join(&config.project.entry_file);
+            let primary_namespace = &config.project.name;
             let mut included_any = false;
             
             for inc in &config.project.include_dirs {
                 let clean_inc = inc.replace("**", "").replace("*", "");
                 let inc_path = current_dir.join(clean_inc.trim_end_matches('/'));
                 if inc_path.exists() {
-                    if let Err(e) = load_all_ish_files(&inc_path, &mut executor, &config.project.name, &mut jobs) {
+                    if let Err(e) = load_all_ish_files(&inc_path, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs) {
                         eprintln!("Failed to load include path {}: {}", inc, e);
                         return ExitCode::FAILURE;
                     }
@@ -197,7 +178,7 @@ Map-Size-Limit: 5000;
             }
             
             if !included_any {
-                if let Err(e) = load_all_ish_files(&current_dir, &mut executor, &config.project.name, &mut jobs) {
+                if let Err(e) = load_all_ish_files(&current_dir, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs) {
                      eprintln!("Failed to load project files: {}", e);
                      return ExitCode::FAILURE;
                 }
@@ -206,7 +187,9 @@ Map-Size-Limit: 5000;
             if let Some(script) = script_file {
                 match std::fs::read_to_string(&script) {
                     Ok(content) => {
-                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &config.project.name, true, &mut jobs) {
+                        let is_entry = std::path::Path::new(&script).canonicalize().unwrap_or_default() == entry_path.canonicalize().unwrap_or_default();
+                        let expected_ns = Some(primary_namespace.to_string());
+                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry) {
                             eprintln!("Script execution failed: {}", e);
                             return ExitCode::FAILURE;
                         }
@@ -220,7 +203,8 @@ Map-Size-Limit: 5000;
                 let entry_path = current_dir.join(&config.project.entry_file);
                 if entry_path.exists() {
                     let content = std::fs::read_to_string(&entry_path).unwrap_or_default();
-                    if let Err(e) = execute_headless_command(&content, &mut executor, true, &config.project.name, true, &mut jobs) {
+                    let expected_ns = Some(primary_namespace.to_string());
+                    if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, true) {
                         eprintln!("Entry-File execution failed: {}", e);
                         return ExitCode::FAILURE;
                     }
@@ -249,7 +233,12 @@ Map-Size-Limit: 5000;
             if let Some(script) = script_file {
                 match std::fs::read_to_string(&script) {
                     Ok(content) => {
-                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &config.project.name, true, &mut jobs) {
+                        let primary_namespace = config.project.name.clone();
+                        let current_dir = std::env::current_dir().unwrap_or_default();
+                        let entry_path = current_dir.join(&config.project.entry_file);
+                        let is_entry = std::path::Path::new(&script).canonicalize().unwrap_or_default() == entry_path.canonicalize().unwrap_or_default();
+                        let expected_ns = Some(primary_namespace);
+                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry) {
                             eprintln!("Script execution failed: {}", e);
                             return ExitCode::FAILURE;
                         }
@@ -311,121 +300,6 @@ Map-Size-Limit: 5000;
                         }
                     }
                 }
-            }
-            
-            ExitCode::SUCCESS
-        }
-        Commands::Build { path } => {
-            let target_dir = std::path::Path::new(&path);
-            if !target_dir.exists() || !target_dir.is_dir() {
-                eprintln!("Error: Path '{}' does not exist or is not a directory.", path);
-                return ExitCode::FAILURE;
-            }
-            
-            let mut found_config = false;
-            let mut build_config = core::config::IshConfig::default();
-            
-            if let Ok(entries) = std::fs::read_dir(target_dir) {
-                for entry in entries.flatten() {
-                    if let Some(ext) = entry.path().extension() {
-                        if ext == "ic" {
-                            if let Ok(config) = core::config::parse_config_file(entry.path()) {
-                                build_config = config;
-                                found_config = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if !found_config {
-                eprintln!("Error: No .ic configuration file found in '{}'.", path);
-                return ExitCode::FAILURE;
-            }
-            
-            let entry_path = target_dir.join(&build_config.project.entry_file);
-            if !entry_path.exists() {
-                eprintln!("Entry-File '{}' not found in project", build_config.project.entry_file);
-                return ExitCode::FAILURE;
-            }
-            
-            // Read and parse the entry file
-            let content = std::fs::read_to_string(&entry_path).unwrap_or_default();
-            let mut lexer = core::tokenizer::Tokenizer::new(&content);
-            let tokens = match lexer.tokenize() {
-                Ok(t) => t,
-                Err(e) => { eprintln!("Lexer error: {}", e); return ExitCode::FAILURE; }
-            };
-            let mut parser = core::parser::Parser::new(tokens);
-            let entry_ast = match parser.parse() {
-                Ok(a) => a,
-                Err(e) => { eprintln!("Parse error: {}", e); return ExitCode::FAILURE; }
-            };
-            
-            if let Err(e) = validate_ast_namespace(&entry_ast, &build_config.project.name, true) {
-                eprintln!("{}", e);
-                return ExitCode::FAILURE;
-            }
-            
-            let mut all_asts = vec![entry_ast];
-            let current_dir = target_dir.to_path_buf();
-            
-            fn load_all_ish_asts(dir: &std::path::Path, primary_namespace: &str, entry_path: &std::path::Path) -> Result<Vec<core::ast::AstNode>, error::IshError> {
-                let mut asts = Vec::new();
-                if dir.is_dir() {
-                    for entry in std::fs::read_dir(dir).map_err(|e| error::IshError::ExecutionError(e.to_string()))? {
-                        let entry = entry.map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
-                        let path = entry.path();
-                        if path.is_dir() {
-                            asts.extend(load_all_ish_asts(&path, primary_namespace, entry_path)?);
-                        } else if path.extension().map_or(false, |ext| ext == "ish") {
-                            // Skip the entry file as it is already parsed and added
-                            if std::fs::canonicalize(&path).unwrap_or(path.clone()) == std::fs::canonicalize(entry_path).unwrap_or(entry_path.to_path_buf()) {
-                                continue;
-                            }
-                            
-                            let content = std::fs::read_to_string(&path).map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
-                            let mut lexer = core::tokenizer::Tokenizer::new(&content);
-                            let tokens = lexer.tokenize()?;
-                            let mut parser = core::parser::Parser::new(tokens);
-                            let ast = parser.parse()?;
-                            
-                            validate_ast_namespace(&ast, primary_namespace, false)?;
-                            asts.push(ast);
-                        }
-                    }
-                }
-                Ok(asts)
-            }
-            
-            let mut included_any = false;
-            for inc in &build_config.project.include_dirs {
-                let clean_inc = inc.replace("**", "").replace("*", "");
-                let inc_path = current_dir.join(clean_inc.trim_end_matches('/'));
-                if inc_path.exists() {
-                    match load_all_ish_asts(&inc_path, &build_config.project.name, &entry_path) {
-                        Ok(asts) => all_asts.extend(asts),
-                        Err(e) => { eprintln!("Parse error in include dir {}: {}", inc, e); return ExitCode::FAILURE; }
-                    }
-                    included_any = true;
-                }
-            }
-            if !included_any {
-                match load_all_ish_asts(&current_dir, &build_config.project.name, &entry_path) {
-                    Ok(asts) => all_asts.extend(asts),
-                    Err(e) => { eprintln!("Parse error: {}", e); return ExitCode::FAILURE; }
-                }
-            }
-            
-            println!("Transpiling {}...", build_config.project.name);
-            let rust_code = compiler::codegen::generate_rust_code(&all_asts);
-            
-            println!("Compiling via bundled toolchain...");
-            let ish_core_path = std::env::current_dir().unwrap_or_default();
-            if let Err(e) = compiler::driver::build_project(&rust_code, target_dir, &ish_core_path) {
-                eprintln!("Build failed: {}", e);
-                return ExitCode::FAILURE;
             }
             
             ExitCode::SUCCESS

@@ -1,8 +1,0 @@
-
-[package]
-name = "ish_compiled"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-ish = { path = "C:/Users/Cortez/Documents/Projects/Ish" }

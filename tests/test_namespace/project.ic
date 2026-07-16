@@ -1,0 +1,6 @@
+[Project]
+Name: "MyProject";
+Entry-File: "main.ish";
+With-Args: false;
+
+[Configuration]

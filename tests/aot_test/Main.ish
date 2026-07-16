@@ -1,7 +1,0 @@
-namespace AOT_Test {
-    public static class Program {
-        public static func Main(params string[] args) {
-            CommandLine.OutputLine("Hello from AOT compiled Ish!");
-        }
-    }
-}

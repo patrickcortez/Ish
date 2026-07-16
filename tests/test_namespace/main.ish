@@ -1,0 +1,7 @@
+namespace MyProject {
+    public static class Program {
+        public static func Main(params string[] args) {
+            CommandLine.OutputLine("Hello namespaces");
+        }
+    }
+}
