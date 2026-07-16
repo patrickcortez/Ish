@@ -5,6 +5,7 @@ The Standard Libraries in Ish provide cross-platform functionality built directl
 > **Note:** earlier versions of this document described these as `snake_case` shell-style commands (e.g. `fs_readfile`, `str_tolower`) invoked bash-style. That syntax no longer exists — Ish is a compiled OOP language now (see the [Scripting Guide](/docs/ish_scripting_guide.md)), and every standard library is called as `ModuleName.Method(args)`.
 
 ## Table of Contents
+- [Global Built-ins](#global-built-ins)
 - [CommandLine I/O (CommandLine)](#commandline-io)
 - [File System I/O (FS)](#file-system-io)
 - [Networking (Net)](#networking)
@@ -14,6 +15,21 @@ The Standard Libraries in Ish provide cross-platform functionality built directl
 - [Machine / OS (OS)](#machine--os)
 - [External Processes (ExtProc)](#external-processes)
 - [Namespaces & Imports](#namespaces--imports)
+
+---
+
+## Global Built-ins
+
+Certain functions are injected directly into the global scope and can be called natively without a class prefix.
+
+| Method | Arguments | Description | Returns |
+|---|---|---|---|
+| `dotenv` | `<string>` | Retrieves an environment variable loaded from the `.env` file at the root of the project. Requires `DotEnv: true;` in `project.ic`. | `string` |
+
+```csharp
+// Fetches the API_KEY from .env
+let key = dotenv("API_KEY");
+```
 
 ---
 
