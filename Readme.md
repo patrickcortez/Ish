@@ -1,4 +1,4 @@
-# Ish Programming Language
+<h1 align="center"> Ish Programming Language </h1>
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -15,7 +15,7 @@
 **Ish** (Inter-Shell) is a cross-platform, natively compiled Object-Oriented Programming (OOP) language built in *Rust*. What started as a hobbyist shell has evolved into a fully-fledged, strongly-typed programming language that prioritizes a seamless development experience.
 
 > ***Info:***
-> This language is still under active development by a single developer.
+> This language is still under active development by a single and stressed out developer.
 > Expect a few bugs while using it.
 
 ---
