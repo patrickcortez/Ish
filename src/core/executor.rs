@@ -25,6 +25,7 @@ pub struct Executor {
     pub gobbler: Gobbler,
     pub is_evaluating: bool,
     pub config: crate::core::config::IshConfig,
+    pub recursion_depth: usize,
 }
 
 impl Executor {
@@ -46,6 +47,7 @@ impl Executor {
             gobbler: Gobbler::new(),
             is_evaluating: false,
             config,
+            recursion_depth: 0,
         }
     }
 
@@ -353,6 +355,24 @@ impl Executor {
     }
 
     pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
+        self.recursion_depth += 1;
+        if self.recursion_depth > 1000 {
+            self.recursion_depth -= 1;
+            return Err(IshError::ExecutionError("Stack overflow: Recursion limit exceeded".into()));
+        }
+        let mem_usage = crate::core::memory::ALLOCATOR.get_current_memory_usage();
+        let limit_mb = self.config.interpreter.max_memory_threshold_mb as usize;
+        if limit_mb > 0 && mem_usage > limit_mb * 1024 * 1024 {
+            self.recursion_depth -= 1;
+            return Err(IshError::ExecutionError(format!("Out of memory: exceeded limit of {} MB", limit_mb)));
+        }
+
+        let res = self.evaluate_node_inner(node, jobs);
+        self.recursion_depth -= 1;
+        res
+    }
+
+    fn evaluate_node_inner(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
             AstNodeKind::InterpolatedString(nodes) => {
                 let mut result = String::new();
@@ -899,8 +919,25 @@ impl Executor {
         None
     }
 
-    pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError>
-    {
+    pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
+        self.recursion_depth += 1;
+        if self.recursion_depth > 1000 {
+            self.recursion_depth -= 1;
+            return Err(IshError::ExecutionError("Stack overflow: Recursion limit exceeded".into()));
+        }
+        let mem_usage = crate::core::memory::ALLOCATOR.get_current_memory_usage();
+        let limit_mb = self.config.interpreter.max_memory_threshold_mb as usize;
+        if limit_mb > 0 && mem_usage > limit_mb * 1024 * 1024 {
+            self.recursion_depth -= 1;
+            return Err(IshError::ExecutionError(format!("Out of memory: exceeded limit of {} MB", limit_mb)));
+        }
+
+        let res = self.execute_node_with_input_inner(node, input, out_file, jobs);
+        self.recursion_depth -= 1;
+        res
+    }
+
+    fn execute_node_with_input_inner(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
         match &node.kind {
             AstNodeKind::CharLiteral(_) => {
                 let val = self.evaluate_node(node, jobs)?;

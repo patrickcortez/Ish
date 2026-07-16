@@ -5,6 +5,7 @@ Welcome to the **Ish Programming Language**!
 Ish has evolved into a fully robust, compiled Object-Oriented Programming (OOP) language. You can run scripts headlessly directly from your terminal using `ish myscript.ish`.
 
 ## Table of Contents
+- [Project Management & Configuration](#project-management--configuration)
 - [Core Syntax](#core-syntax)
 - [Variables & Scoping](#variables--scoping)
 - [Data Structures](#data-structures)
@@ -17,6 +18,59 @@ Ish has evolved into a fully robust, compiled Object-Oriented Programming (OOP) 
 - [Generics & Advanced Types](#generics--advanced-types)
 - [Namespaces & Imports](#namespaces--imports)
 - [Memory Management](#memory-management)
+
+---
+
+## Project Management & Configuration
+
+Ish features a powerful built-in project manager and configuration engine to streamline large codebases. Instead of calling scripts individually, you can initialize an entire project.
+
+### The CLI Commands
+
+Ish comes with an intuitive Command Line Interface:
+
+| Command | Description |
+|---|---|
+| `ish init` | Initializes a new Ish project in the current directory and generates a default `project.ic` file. |
+| `ish run` | Runs the project based on the configuration in `project.ic`. |
+| `ish run <args>` | Runs the project and passes arguments to the Entry-Method. |
+| `ish debug` | Runs the project in debug mode, outputting active limits and verbose information. |
+| `ish version` | Outputs the current version of the Ish interpreter. |
+| `ish help` | Displays the help menu. |
+
+### The `project.ic` Configuration File
+
+When you run `ish init`, Ish creates a `project.ic` configuration file. This flat, human-readable file dictates how the interpreter executes your project.
+
+```ini
+[Project]
+Name: "My-project"; 
+Entry-File:"Main.ish"; // The main file to execute.
+Entry-Class:"Program"; // The entry class.
+Entry-Method:"Main"; // The entry method.
+With-Args: true; // If true, requires the signature `params string[] args`.
+
+Include: // Directories Ish will load. Without this, Ish loads everything in the directory.
+    - "Scripts/**"; 
+    - "Lib/**"; 
+
+Verbose: false; // Enables internal operational outputs
+DotEnv: true; // Enables loading variables from a `.env` file in the project root.
+
+[Configuration] // Interpreter execution limits
+Array-Size-Limit: 1024;
+List-Size-Limit: 1024;
+Map-Size-Limit: 1024;
+String-Length-Limit: 1024;
+Max-variables: 1024;
+Max-Memory-Threshold: 128; // Stops execution if memory usage exceeds 128 MB.
+```
+
+### DotEnv Support
+If `DotEnv: true;` is set in your `project.ic`, Ish will parse the `.env` file at the root of your project. You can access these variables globally in any script using the `dotenv()` function:
+```csharp
+let apiKey = dotenv("API_KEY");
+```
 
 ---
 
@@ -33,7 +87,7 @@ public static class Program {
 }
 ```
 
-`args` is populated automatically from the command-line arguments passed to `ish myscript.ish arg1 arg2` — you don't fill it in yourself.
+`args` is populated automatically from the command-line arguments passed to `ish run` — you don't fill it in yourself.
 
 ### String Interpolation
 Ish supports string interpolation using the `$"..."` syntax. You can embed expressions directly inside strings using curly braces `{}`.
@@ -394,7 +448,7 @@ To use declarations from a namespace defined in a different `.ish` file in the s
 with App;
 ```
 
-This is not a file-path import. At startup, Ish recursively scans every `.ish` file in the current working directory tree, finds whichever file(s) declare `namespace App { ... }`, and merges their classes/structs/enums/functions into your program. If no file in the project declares the named namespace, Ish reports an error at runtime rather than failing to parse.
+This is not a file-path import. At startup, if you are using `ish run` with a `project.ic`, Ish recursively scans every `.ish` file specified in your `Include` array (or the current directory by default), finds whichever file(s) declare `namespace App { ... }`, and merges their classes/structs/enums/functions into your program. If no file in the project declares the named namespace, Ish reports an error at runtime.
 
 ---
 
@@ -402,6 +456,7 @@ This is not a file-path import. At startup, Ish recursively scans every `.ish` f
 
 Ish utilizes a robust and modern architecture to ensure scripts execute safely and efficiently.
 
+<<<<<<< HEAD
 ### Automatic Generational Garbage Collection
 Ish uses a fully automatic **Memory Management System (MMS)** called **The Gobbler**. 
 You never have to manually free memory in Ish. The Gobbler actively traces your variables using a highly optimized **Generational Mark-and-Sweep** algorithm:
@@ -417,3 +472,9 @@ To prevent runtime crashes, Ish actively tracks memory consumption and stack rec
 
 ### Thread Safety (Isolate Model)
 Ish is inherently thread-safe by utilizing an **Isolate Architecture**. When multi-threading features are utilized, each thread executes in its very own isolated environment containing a distinct Executor and Gobbler instance. This ensures that memory is never dangerously shared across threads, avoiding strict runtime locks and data races.
+=======
+### Automatic Garbage Collection
+You never have to manually free memory in Ish. The Gobbler actively traces your variables. When an object goes out of scope, the Gobbler instantly unallocates its memory using a rigorous **Mark-and-Sweep** algorithm, invoking any destructor (`~ClassName`) defined on the object's class along the way.
+
+You can strictly configure limits in your `project.ic` (like `Max-Memory-Threshold: 128;`) ensuring The Gobbler protects your system from uncontrolled memory leaks by safely terminating the script if limits are crossed.
+>>>>>>> feature/thread-memory-safe-generational-gc
