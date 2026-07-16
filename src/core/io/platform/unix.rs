@@ -1,42 +1,17 @@
 use super::super::error::IshIOError;
-use std::os::unix::io::AsRawFd;
-
-const STDIN_FD: i32 = 0;
-const STDOUT_FD: i32 = 1;
-const STDERR_FD: i32 = 2;
-
-const ICANON: u32 = 0x0002;
-const ECHO: u32 = 0x0008;
-const TCSANOW: i32 = 0;
-
-#[repr(C)]
-struct Termios {
-    c_iflag: u32,
-    c_oflag: u32,
-    c_cflag: u32,
-    c_lflag: u32,
-    c_cc: [u8; 32],
-    c_ispeed: u32,
-    c_ospeed: u32,
-}
-
-extern "C" {
-    fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
-    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
-    fn tcgetattr(fd: i32, termios_p: *mut Termios) -> i32;
-    fn tcsetattr(fd: i32, optional_actions: i32, termios_p: *const Termios) -> i32;
-}
+use libc::{termios, tcgetattr, tcsetattr, read, write, STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO, ICANON, ECHO, TCSANOW};
+use std::mem::MaybeUninit;
 
 pub struct UnixStdin {
     fd: i32,
-    original_termios: Option<Termios>,
+    original_termios: Option<termios>,
     raw_mode_enabled: bool,
 }
 
 impl UnixStdin {
     pub fn new() -> Result<Self, IshIOError> {
         Ok(Self {
-            fd: STDIN_FD,
+            fd: STDIN_FILENO,
             original_termios: None,
             raw_mode_enabled: false,
         })
@@ -47,26 +22,18 @@ impl UnixStdin {
             return Ok(());
         }
         
-        let mut termios = Termios {
-            c_iflag: 0,
-            c_oflag: 0,
-            c_cflag: 0,
-            c_lflag: 0,
-            c_cc: [0; 32],
-            c_ispeed: 0,
-            c_ospeed: 0,
-        };
+        let mut term = unsafe { MaybeUninit::<termios>::zeroed().assume_init() };
         
-        let result = unsafe { tcgetattr(self.fd, &mut termios) };
+        let result = unsafe { tcgetattr(self.fd, &mut term) };
         if result != 0 {
             return Err(IshIOError::StreamError("Failed to get terminal attributes".to_string()));
         }
         
-        self.original_termios = Some(termios);
+        self.original_termios = Some(term);
         
-        termios.c_lflag &= !(ICANON | ECHO);
+        term.c_lflag &= !(ICANON | ECHO);
         
-        let result = unsafe { tcsetattr(self.fd, TCSANOW, &termios) };
+        let result = unsafe { tcsetattr(self.fd, TCSANOW, &term) };
         if result != 0 {
             return Err(IshIOError::StreamError("Failed to set terminal attributes".to_string()));
         }
@@ -93,7 +60,7 @@ impl UnixStdin {
     
     pub fn read_line(&mut self) -> Result<String, IshIOError> {
         let mut buffer = [0u8; 4096];
-        let bytes_read = unsafe { read(self.fd, buffer.as_mut_ptr(), buffer.len()) };
+        let bytes_read = unsafe { read(self.fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len()) };
         
         if bytes_read < 0 {
             return Err(IshIOError::StreamError("Failed to read from stdin".to_string()));
@@ -107,7 +74,7 @@ impl UnixStdin {
         self.enable_raw_mode()?;
         
         let mut buffer = [0u8; 1];
-        let bytes_read = unsafe { read(self.fd, buffer.as_mut_ptr(), 1) };
+        let bytes_read = unsafe { read(self.fd, buffer.as_mut_ptr() as *mut libc::c_void, 1) };
         
         self.disable_raw_mode()?;
         
@@ -122,7 +89,7 @@ impl UnixStdin {
 impl Default for UnixStdin {
     fn default() -> Self {
         Self::new().unwrap_or_else(|_| Self {
-            fd: STDIN_FD,
+            fd: STDIN_FILENO,
             original_termios: None,
             raw_mode_enabled: false,
         })
@@ -135,12 +102,12 @@ pub struct UnixStdout {
 
 impl UnixStdout {
     pub fn new() -> Result<Self, IshIOError> {
-        Ok(Self { fd: STDOUT_FD })
+        Ok(Self { fd: STDOUT_FILENO })
     }
     
     pub fn write(&mut self, data: &str) -> Result<(), IshIOError> {
         let bytes = data.as_bytes();
-        let bytes_written = unsafe { write(self.fd, bytes.as_ptr(), bytes.len()) };
+        let bytes_written = unsafe { write(self.fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
         
         if bytes_written < 0 || bytes_written as usize != bytes.len() {
             return Err(IshIOError::StreamError("Failed to write to stdout".to_string()));
@@ -161,7 +128,7 @@ impl UnixStdout {
 
 impl Default for UnixStdout {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self { fd: STDOUT_FD })
+        Self::new().unwrap_or_else(|_| Self { fd: STDOUT_FILENO })
     }
 }
 
@@ -171,12 +138,12 @@ pub struct UnixStderr {
 
 impl UnixStderr {
     pub fn new() -> Result<Self, IshIOError> {
-        Ok(Self { fd: STDERR_FD })
+        Ok(Self { fd: STDERR_FILENO })
     }
     
     pub fn write(&mut self, data: &str) -> Result<(), IshIOError> {
         let bytes = data.as_bytes();
-        let bytes_written = unsafe { write(self.fd, bytes.as_ptr(), bytes.len()) };
+        let bytes_written = unsafe { write(self.fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
         
         if bytes_written < 0 || bytes_written as usize != bytes.len() {
             return Err(IshIOError::StreamError("Failed to write to stderr".to_string()));
@@ -197,7 +164,7 @@ impl UnixStderr {
 
 impl Default for UnixStderr {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self { fd: STDERR_FD })
+        Self::new().unwrap_or_else(|_| Self { fd: STDERR_FILENO })
     }
 }
 
