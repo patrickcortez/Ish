@@ -21,6 +21,8 @@ fn as_string(v: &IshValue) -> String {
         IshValue::Char(c) => c.to_string(),
         IshValue::Reference(id) => format!("<Reference {}>", id),
         IshValue::TypeRef(t) => format!("<Type {}>", t),
+        IshValue::Task(id) => format!("<Task {}>", id),
+        IshValue::Thread(id) => format!("<Thread {}>", id),
     }
 }
 

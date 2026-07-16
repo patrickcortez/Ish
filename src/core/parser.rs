@@ -559,6 +559,7 @@ impl Parser {
         use crate::core::ast::AccessSpecifier;
         let mut access = AccessSpecifier::Internal; // default access
         let mut is_static = false;
+        let mut is_async = false;
         
         while let Some(tok) = self.peek() {
             match tok.kind {
@@ -567,6 +568,7 @@ impl Parser {
                 TokenKind::Protected => { access = AccessSpecifier::Protected; self.consume(); }
                 TokenKind::Internal => { access = AccessSpecifier::Internal; self.consume(); }
                 TokenKind::Static => { is_static = true; self.consume(); }
+                TokenKind::Async => { is_async = true; self.consume(); }
                 _ => break,
             }
         }
@@ -575,9 +577,9 @@ impl Parser {
             match tok.kind {
                 TokenKind::Class => self.parse_class(access, is_static),
                 TokenKind::Struct => self.parse_struct(access),
-                TokenKind::Function => self.parse_function(access, is_static),
+                TokenKind::Function => self.parse_function(access, is_static, is_async),
                 TokenKind::Enum => self.parse_enum(access),
-                TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Word(_) => {
+                TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Task | TokenKind::Thread | TokenKind::Word(_) => {
                     let kw_tok = self.consume().unwrap();
                     let mut type_name = match kw_tok.kind {
                         TokenKind::Var => "var".to_string(),
@@ -587,6 +589,8 @@ impl Parser {
                         TokenKind::BoolKeyword => "bool".to_string(),
                         TokenKind::List => "List".to_string(),
                         TokenKind::CharKeyWord => "char".to_string(),
+                        TokenKind::Task => "Task".to_string(),
+                        TokenKind::Thread => "Thread".to_string(),
                         TokenKind::Word(w) => w,
                         _ => unreachable!(),
                     };
@@ -607,6 +611,8 @@ impl Parser {
                                     TokenKind::FloatKeyword => type_name.push_str("float"),
                                     TokenKind::BoolKeyword => type_name.push_str("bool"),
                                     TokenKind::CharKeyWord => type_name.push_str("char"),
+                                    TokenKind::Task => type_name.push_str("Task"),
+                                    TokenKind::Thread => type_name.push_str("Thread"),
                                     TokenKind::Comma => type_name.push(','),
                                     _ => return Err(IshError::ParseError("Invalid generic type argument".to_string())),
                                 }
@@ -865,7 +871,7 @@ impl Parser {
                     let mut type_name = None;
                     let mut is_array = false;
                     if let Some(tok) = self.peek() {
-                        if matches!(tok.kind, TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Word(_)) {
+                        if matches!(tok.kind, TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::List | TokenKind::CharKeyWord | TokenKind::Task | TokenKind::Thread | TokenKind::Word(_)) {
                             let kw_tok = self.consume().ok_or_else(|| IshError::ParseError("Expected type keyword".to_string()))?;
                             let mut tn = match kw_tok.kind {
                                 TokenKind::StringKeyword => "string".to_string(),
@@ -874,6 +880,8 @@ impl Parser {
                                 TokenKind::BoolKeyword => "bool".to_string(),
                                 TokenKind::CharKeyWord => "char".to_string(),
                                 TokenKind::List => "List".to_string(),
+                                TokenKind::Task => "Task".to_string(),
+                                TokenKind::Thread => "Thread".to_string(),
                                 TokenKind::Word(w) => w,
                                 _ => return Err(IshError::ParseError("Expected type keyword".to_string())),
                             };
@@ -894,6 +902,8 @@ impl Parser {
                                             TokenKind::FloatKeyword => tn.push_str("float"),
                                             TokenKind::BoolKeyword => tn.push_str("bool"),
                                             TokenKind::CharKeyWord => tn.push_str("char"),
+                                            TokenKind::Task => tn.push_str("Task"),
+                                            TokenKind::Thread => tn.push_str("Thread"),
                                             TokenKind::Comma => tn.push(','),
                                             _ => return Err(IshError::ParseError("Invalid generic type argument".to_string())),
                                         }
@@ -946,7 +956,7 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool) -> Result<AstNode, IshError> {
+    fn parse_function(&mut self, access: crate::core::ast::AccessSpecifier, is_static: bool, is_async: bool) -> Result<AstNode, IshError> {
         let (line, col) = self.get_location();
         self.consume(); // Consume TokenKind::Function
         let name = match self.consume().ok_or_else(|| IshError::ParseError("Expected function name".to_string()))? {
@@ -972,7 +982,7 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        Ok(AstNode::new(AstNodeKind::Function { name, params, body, access, is_static }, line, col))
+        Ok(AstNode::new(AstNodeKind::Function { name, params, body, access, is_static, is_async }, line, col))
     }
 
     fn parse_interpolated_expression(&mut self, expr_str: &str) -> Result<AstNode, IshError> {
@@ -1027,7 +1037,13 @@ impl Parser {
         let (line, col) = self.get_location();
         
         if let Some(tok) = self.peek() {
-            if matches!(tok.kind, TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::CharKeyWord | TokenKind::List) {
+            if matches!(tok.kind, TokenKind::Await) {
+                let await_tok = self.consume().unwrap();
+                let inner = self.parse_expression()?;
+                return Ok(AstNode::new(AstNodeKind::Await(Box::new(inner)), await_tok.line, await_tok.column));
+            }
+
+            if matches!(tok.kind, TokenKind::Var | TokenKind::StringKeyword | TokenKind::IntKeyword | TokenKind::FloatKeyword | TokenKind::BoolKeyword | TokenKind::CharKeyWord | TokenKind::List | TokenKind::Task | TokenKind::Thread) {
                 let kw_tok = self.consume().unwrap();
                 let mut type_name = match kw_tok.kind {
                     TokenKind::Var => "var",
@@ -1037,6 +1053,8 @@ impl Parser {
                     TokenKind::BoolKeyword => "bool",
                     TokenKind::CharKeyWord => "char",
                     TokenKind::List => "List",
+                    TokenKind::Task => "Task",
+                    TokenKind::Thread => "Thread",
                     _ => unreachable!(),
                 }.to_string();
 
@@ -1379,7 +1397,6 @@ impl Parser {
                                 match &tok.kind {
                                     TokenKind::Word(w) => result.push_str(w),
                                     TokenKind::StringLiteral(w) => result.push_str(&format!("\"{}\"", w)),
-                                    TokenKind::Word(iv) => result.push_str(&iv.clone()),
                                     _ => {}
                                 }
                                 self.consume();
@@ -1437,7 +1454,6 @@ impl Parser {
                                 match &tok.kind {
                                     TokenKind::Word(w) => var_str.push_str(w),
                                     TokenKind::StringLiteral(w) => var_str.push_str(&format!("\"{}\"", w)),
-                                    TokenKind::Word(iv) => var_str.push_str(&iv.clone()),
                                     _ => {}
                                 }
                                 self.consume();

@@ -87,6 +87,9 @@ impl Linter {
                 self.check_node(left)?;
                 self.check_node(right)?;
             }
+            AstNodeKind::Await(expr) => {
+                self.check_node(expr)?;
+            }
             AstNodeKind::IndexAccess { object, index } => {
                 self.check_node(object)?;
                 self.check_node(index)?;

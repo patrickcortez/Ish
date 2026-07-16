@@ -1,0 +1,33 @@
+namespace Ish-Project {
+    public static class Program {
+        public static async func TaskFunction() {
+            CommandLine.OutputLine("Task starting...");
+            Task.Delay(1000);
+            CommandLine.OutputLine("Task finished after delay.");
+            return "Task Result";
+        }
+
+        public static func ThreadFunction() {
+            CommandLine.OutputLine("Thread starting...");
+            Thread.Sleep(1000);
+            CommandLine.OutputLine("Thread finished after sleep. Current ID: " + Thread.CurrentThreadId());
+            return "Thread Result";
+        }
+
+        public static func Main(params string[] args) {
+            CommandLine.OutputLine("Spawning Task...");
+            var myTask = Task.Run("TaskFunction");
+            
+            CommandLine.OutputLine("Spawning Thread...");
+            var myThread = Thread.Start("ThreadFunction");
+            
+            CommandLine.OutputLine("Awaiting Task...");
+            var taskRes = await myTask;
+            CommandLine.OutputLine("Task returned: " + taskRes);
+            
+            CommandLine.OutputLine("Joining Thread...");
+            var threadRes = Thread.Join(myThread);
+            CommandLine.OutputLine("Thread returned: " + threadRes);
+        }
+    }
+}

@@ -7,7 +7,9 @@ pub enum IshValue {
     Char(char),
     Null,
     Reference(usize),
-    TypeRef(String)
+    TypeRef(String),
+    Task(usize),
+    Thread(usize)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +40,8 @@ impl IshValue {
             IshValue::Char(c) => c.to_string(),
             IshValue::Reference(id) => format!("<Reference {}>", id),
             IshValue::TypeRef(t) => format!("<Type {}>", t),
+            IshValue::Task(id) => format!("<Task {}>", id),
+            IshValue::Thread(id) => format!("<Thread {}>", id),
         }
     }
 
@@ -123,6 +127,7 @@ pub enum AstNodeKind {
         body: Vec<AstNode>,
         access: AccessSpecifier,
         is_static: bool,
+        is_async: bool,
     },
 
     /// Try-Catch block
@@ -134,6 +139,9 @@ pub enum AstNodeKind {
 
     /// Return statement
     Return(Box<AstNode>),
+
+    /// Await expression
+    Await(Box<AstNode>),
 
     Break,
 

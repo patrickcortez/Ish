@@ -173,7 +173,7 @@ impl Registry {
                 let mut field_map = HashMap::new();
 
                 for method_node in methods {
-                    if let AstNodeKind::Function { name: mname, params, body, access: maccess, is_static: mstatic } = &method_node.kind {
+                    if let AstNodeKind::Function { name: mname, params, body, access: maccess, is_static: mstatic, is_async: _ } = &method_node.kind {
                         method_map.insert(mname.clone(), MethodDef {
                             name: mname.clone(),
                             access: maccess.clone(),

@@ -109,6 +109,38 @@ CommandLine.OutputLine($"Welcome to {name} v{version}!");
 
 ---
 
+## Data Types & Declarations
+
+Ish is a versatile OOP language that supports a comprehensive set of built-in data types.
+
+### Primitive Types
+
+- **`int`**: 32-bit signed integer. (e.g., `int x = 10;`)
+- **`float`**: 32-bit floating-point number. (e.g., `float y = 3.14;`)
+- **`bool`**: Boolean value (`true` or `false`).
+- **`char`**: A single Unicode character, enclosed in single quotes. (e.g., `char c = 'A';`)
+- **`string`**: A sequence of characters, enclosed in double quotes. (e.g., `string s = "Hello";`)
+
+### Advanced & Generic Types
+
+- **`List<T>`**: A dynamically sized array of elements. (e.g., `List<int> numbers = new List<int>();`)
+- **`Map<K, V>`**: A key-value dictionary. (e.g., `Map<string, int> ages = new Map<string, int>();`)
+- **`Task<T>`**: Represents an asynchronous operation returning a type `T`. (e.g., `Task<string> fetchTask = ...;`)
+- **`Pair`**: A simple key-value struct (often used intrinsically in Maps).
+- **Custom Classes/Structs**: You can declare variables using the name of any user-defined `class` or `struct`.
+
+### Type Annotations
+
+While you can use `let` or `var` for declarations (letting the interpreter infer or dynamically manage the type), you can also strictly declare the type:
+
+```csharp
+int count = 5;
+string name = "Ish";
+Task<int> asyncJob = Task.Run(SomeAsyncMethod);
+```
+
+---
+
 ## Variables & Scoping
 
 Ish enforces strict variable management via the `let` keyword (or any other type-like word — see note below). Note that as of the current build, Ish no longer uses a `$` prefix for variable references anywhere in the language; writing `$name` will raise a parse error.
@@ -512,8 +544,6 @@ This is not a file-path import. At startup, if you are using `ish run` with a `p
 
 Ish utilizes a robust and modern architecture to ensure scripts execute safely and efficiently.
 
-<<<<<<< HEAD
-
 ### Automatic Generational Garbage Collection
 
 Ish uses a fully automatic **Memory Management System (MMS)** called **The Gobbler**.
@@ -534,11 +564,3 @@ To prevent runtime crashes, Ish actively tracks memory consumption and stack rec
 ### Thread Safety (Isolate Model)
 
 Ish is inherently thread-safe by utilizing an **Isolate Architecture**. When multi-threading features are utilized, each thread executes in its very own isolated environment containing a distinct Executor and Gobbler instance. This ensures that memory is never dangerously shared across threads, avoiding strict runtime locks and data races
-=======
-
-### Automatic Garbage Collection
-
-You never have to manually free memory in Ish. The Gobbler actively traces your variables. When an object goes out of scope, the Gobbler instantly unallocates its memory using a rigorous **Mark-and-Sweep** algorithm, invoking any destructor (`~ClassName`) defined on the object's class along the way.
-
-You can strictly configure limits in your `project.ic` (like `Max-Memory-Threshold: 128;`) ensuring The Gobbler protects your system from uncontrolled memory leaks by safely terminating the script if limits are crossed.
->>>>>>> feature/thread-memory-safe-generational-gc

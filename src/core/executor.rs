@@ -26,6 +26,10 @@ pub struct Executor {
     pub is_evaluating: bool,
     pub config: crate::core::config::IshConfig,
     pub recursion_depth: usize,
+    pub tasks: HashMap<usize, tokio::task::JoinHandle<Result<crate::core::ast::IshValue, crate::error::IshError>>>,
+    pub threads: HashMap<usize, std::thread::JoinHandle<Result<crate::core::ast::IshValue, crate::error::IshError>>>,
+    pub next_task_id: usize,
+    pub next_thread_id: usize,
 }
 
 impl Executor {
@@ -48,7 +52,23 @@ impl Executor {
             is_evaluating: false,
             config,
             recursion_depth: 0,
+            tasks: HashMap::new(),
+            threads: HashMap::new(),
+            next_task_id: 1,
+            next_thread_id: 1,
         }
+    }
+
+    pub fn clone_for_isolate(&self) -> Self {
+        let mut iso = Executor::new(self.script_args.clone(), self.config.clone());
+        iso.registry = self.registry.clone();
+        iso.functions = self.functions.clone();
+        iso.variables = self.variables.clone();
+        iso.static_variables = self.static_variables.clone();
+        iso.gobbler = self.gobbler.clone();
+        iso.current_class = self.current_class.clone();
+        iso.function_bases = self.function_bases.clone();
+        iso
     }
 
     pub fn value_to_string(&self, val: &crate::core::ast::IshValue) -> String {
@@ -60,6 +80,8 @@ impl Executor {
             crate::core::ast::IshValue::Null => "null".to_string(),
             crate::core::ast::IshValue::Char(c) => c.to_string(),
             crate::core::ast::IshValue::TypeRef(t) => format!("<Type {}>", t),
+            crate::core::ast::IshValue::Task(id) => format!("<Task {}>", id),
+            crate::core::ast::IshValue::Thread(id) => format!("<Thread {}>", id),
             crate::core::ast::IshValue::Reference(id) => {
                 if let Some(obj) = self.gobbler.get(*id) {
                     match obj {
@@ -92,7 +114,8 @@ impl Executor {
         }
     }
 
-    fn pop_scope(&mut self, jobs: &mut JobController) -> Result<(), IshError> {
+    #[async_recursion::async_recursion]
+    async fn pop_scope(&mut self, jobs: &mut JobController) -> Result<(), IshError> {
         self.variables.pop();
         let finalized = self.gobbler.collect(&self.variables, &self.static_variables, self.return_value.as_ref());
         for (_id, class_name, properties) in finalized {
@@ -133,7 +156,7 @@ impl Executor {
                 self.current_class = Some(qual_name);
                 
                 for stmt in destructor_body {
-                    let _ = self.execute_node_with_input(&stmt, "", None, jobs);
+                    let _ = self.execute_node_with_input(&stmt, "", None, jobs).await;
                 }
                 
                 self.function_bases.pop();
@@ -148,7 +171,8 @@ impl Executor {
         Ok(())
     }
 
-    fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
+    #[async_recursion::async_recursion]
+    async fn resolve_var(&mut self, s: &str, jobs: &mut JobController) -> Result<String, IshError> {
         // Shell-style variable expansion for legacy compatibility
         let mut result = String::new();
         let mut chars = s.chars().peekable();
@@ -180,7 +204,7 @@ impl Executor {
                         if chars.peek() == Some(&')') {
                             chars.next(); // Consume outer ')'
                         }
-                        let resolved_inner = self.resolve_var(&inner, jobs)?;
+                        let resolved_inner = self.resolve_var(&inner, jobs).await?;
                         match crate::core::utils::eval_math(&resolved_inner) {
                             Ok(val) => result.push_str(&val.to_string()),
                             Err(e) => return Err(IshError::ExecutionError(format!("Math error: {}", e))),
@@ -208,7 +232,7 @@ impl Executor {
                         if let Ok(tokens) = tokenizer.tokenize() {
                             let mut parser = crate::core::parser::Parser::new(tokens);
                             if let Ok(ast) = parser.parse() {
-                                let out = self.capture_output(&ast, jobs)?;
+                                let out = self.capture_output(&ast, jobs).await?;
                                 result.push_str(&out);
                             }
                         }
@@ -270,7 +294,7 @@ impl Executor {
                                 } else if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
                                     trimmed[1..trimmed.len()-1].to_string()
                                 } else if trimmed.starts_with('$') {
-                                    self.resolve_var(&trimmed, jobs)?
+                                    self.resolve_var(&trimmed, jobs).await?
                                 } else if trimmed.parse::<usize>().is_ok() {
                                     trimmed
                                 } else {
@@ -330,13 +354,14 @@ impl Executor {
         (program.to_string(), args.to_vec())
     }
 
-    fn capture_output(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<String, IshError> {
+    #[async_recursion::async_recursion]
+    async fn capture_output(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<String, IshError> {
         let temp_dir = std::env::temp_dir();
         let file_name = format!("ish_cap_{}_{}.tmp", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
         let temp_path = temp_dir.join(file_name);
         let path_str = temp_path.to_str().unwrap();
 
-        match self.execute_node_with_input(node, "", Some(path_str), jobs) {
+        match self.execute_node_with_input(node, "", Some(path_str), jobs).await {
             Ok(_) => {
                 let out = std::fs::read_to_string(&temp_path).unwrap_or_default();
                 let _ = std::fs::remove_file(&temp_path);
@@ -354,7 +379,8 @@ impl Executor {
         }
     }
 
-    pub fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
+    #[async_recursion::async_recursion]
+    pub async fn evaluate_node(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         self.recursion_depth += 1;
         if self.recursion_depth > 1000 {
             self.recursion_depth -= 1;
@@ -367,17 +393,32 @@ impl Executor {
             return Err(IshError::ExecutionError(format!("Out of memory: exceeded limit of {} MB", limit_mb)));
         }
 
-        let res = self.evaluate_node_inner(node, jobs);
+        let res = self.evaluate_node_inner(node, jobs).await;
         self.recursion_depth -= 1;
         res
     }
 
-    fn evaluate_node_inner(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
+    #[async_recursion::async_recursion]
+    async fn evaluate_node_inner(&mut self, node: &AstNode, jobs: &mut JobController) -> Result<IshValue, IshError> {
         match &node.kind {
+            AstNodeKind::Await(expr) => {
+                let val = self.evaluate_node_inner(expr, jobs).await?;
+                if let IshValue::Task(id) = val {
+                    if let Some(handle) = self.tasks.remove(&id) {
+                        match handle.await {
+                            Ok(res) => return res,
+                            Err(e) => return Err(IshError::ExecutionError(format!("Task execution failed: {}", e))),
+                        }
+                    } else {
+                        return Err(IshError::ExecutionError(format!("Invalid or already awaited task ID: {}", id)));
+                    }
+                }
+                return Err(IshError::ExecutionError("Can only await a Task".to_string()));
+            },
             AstNodeKind::InterpolatedString(nodes) => {
                 let mut result = String::new();
                 for n in nodes {
-                    let eval_val = self.evaluate_node(n, jobs)?;
+                    let eval_val = self.evaluate_node(n, jobs).await?;
                     match eval_val {
                         IshValue::String(s) => result.push_str(&s),
                         IshValue::Int(i) => result.push_str(&i.to_string()),
@@ -403,7 +444,8 @@ impl Executor {
                 var_name == "string" || var_name == "char" || var_name == "List" ||
                 var_name == "Math" || var_name == "Time" || var_name == "Str" || 
                 var_name == "FS" || var_name == "Net" || var_name == "OS" || 
-                var_name == "ExtProc" || var_name == "CommandLine" 
+                var_name == "ExtProc" || var_name == "CommandLine" ||
+                var_name == "Task" || var_name == "Thread"
                 {   
                     return Ok(IshValue::TypeRef(var_name.clone()));
                 }
@@ -497,8 +539,8 @@ impl Executor {
                 Err(crate::error::IshError::ExecutionError(format!("Variable '{}' is not defined in this scope", var_name)))
             }
             AstNodeKind::IndexAccess { object, index } => {
-                let obj_val = self.evaluate_node(object, jobs)?;
-                let index_val = self.evaluate_node(index, jobs)?;
+                let obj_val = self.evaluate_node(object, jobs).await?;
+                let index_val = self.evaluate_node(index, jobs).await?;
 
                 if let IshValue::String(s) = &obj_val {
                     if let IshValue::Int(i) = index_val {
@@ -532,7 +574,7 @@ impl Executor {
                 Err(IshError::ExecutionError(format!("TypeError: Cannot index into non-array/list type")))
             }
             AstNodeKind::PropertyAccess { object, property_name } => {
-                let obj_val = self.evaluate_node(object, jobs)?;
+                let obj_val = self.evaluate_node(object, jobs).await?;
 
                 if let IshValue::TypeRef(s) = &obj_val {
                     if s == "string" && property_name == "Empty" {
@@ -625,7 +667,7 @@ impl Executor {
                         }
                     }
                 }
-                let resolved = self.resolve_var(s, jobs)?;
+                let resolved = self.resolve_var(s, jobs).await?;
                 if let Ok(i) = resolved.parse::<i32>() {
                     Ok(IshValue::Int(i))
                 } else if let Ok(f) = resolved.parse::<f32>() {
@@ -642,8 +684,8 @@ impl Executor {
             }
 
             AstNodeKind::BinaryOp { left, operator, right } => {
-                let left_val = self.evaluate_node(left, jobs)?;
-                let right_val = self.evaluate_node(right, jobs)?;
+                let left_val = self.evaluate_node(left, jobs).await?;
+                let right_val = self.evaluate_node(right, jobs).await?;
                 
                 match operator.as_str() {
                     "+" => {
@@ -766,7 +808,7 @@ impl Executor {
                 Ok(IshValue::Bool(success))
             }
             AstNodeKind::UnaryOp { operator, operand } => {
-                let val = self.evaluate_node(operand, jobs)?;
+                let val = self.evaluate_node(operand, jobs).await?;
                 match operator.as_str() {
                     "!" => {
                         match val {
@@ -785,21 +827,21 @@ impl Executor {
                 }
             }
             AstNodeKind::TernaryOp { condition, true_value, false_value } => {
-                let cond_val = self.evaluate_node(condition, jobs)?;
+                let cond_val = self.evaluate_node(condition, jobs).await?;
                 let is_true = match cond_val {
                     IshValue::Bool(b) => b,
                     IshValue::Null => false,
                     _ => true,
                 };
                 if is_true {
-                    self.evaluate_node(true_value, jobs)
+                    self.evaluate_node(true_value, jobs).await
                 } else {
-                    self.evaluate_node(false_value, jobs)
+                    self.evaluate_node(false_value, jobs).await
                 }
             }
             _ => {
                 self.return_value = None;
-                self.execute_node_with_input(node, "", None, jobs)?;
+                self.execute_node_with_input(node, "", None, jobs).await?;
                 if let Some(val) = self.return_value.take() {
                     Ok(val)
                 } else {
@@ -809,7 +851,8 @@ impl Executor {
         }
     }
 
-    pub fn execute(&mut self, ast: &AstNode, enforce_entry_point: bool, jobs: &mut JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<bool, IshError> {
+    #[async_recursion::async_recursion]
+    pub async fn execute(&mut self, ast: &AstNode, enforce_entry_point: bool, jobs: &mut JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<bool, IshError> {
         if let Some(expected_ns) = expected_namespace {
             let mut declared_namespace = None;
             if let AstNodeKind::NamespaceDecl { name: _, body } = &ast.kind {
@@ -847,7 +890,7 @@ impl Executor {
             for (field_name, field_def) in &class_def.fields {
                 if field_def.is_static {
                     let val = if let Some(default_node) = &field_def.default_value {
-                        self.evaluate_node(default_node, jobs)?
+                        self.evaluate_node(default_node, jobs).await?
                     } else {
                         IshValue::Null
                     };
@@ -861,7 +904,7 @@ impl Executor {
             for (field_name, field_def) in &struct_def.fields {
                 if field_def.is_static {
                     let val = if let Some(default_node) = &field_def.default_value {
-                        self.evaluate_node(default_node, jobs)?
+                        self.evaluate_node(default_node, jobs).await?
                     } else {
                         IshValue::Null
                     };
@@ -871,7 +914,7 @@ impl Executor {
         }
 
         // Execute all declarations so methods get registered in self.functions
-        self.execute_node_with_input(ast, "", None, jobs)?;
+        self.execute_node_with_input(ast, "", None, jobs).await?;
 
         if enforce_entry_point {
             match self.registry.find_entry_point(
@@ -908,7 +951,7 @@ impl Executor {
 
                     let _last_output = String::new();
                     for stmt in &main_method.body {
-                        self.execute_node_with_input(stmt, "", None, jobs)?;
+                        self.execute_node_with_input(stmt, "", None, jobs).await?;
                         if self.returning { break; }
                     }
                     
@@ -916,7 +959,7 @@ impl Executor {
                     
                     self.returning = false;
                     self.function_bases.pop();
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                     self.current_class = None;
                     
                     if let Some(IshValue::Int(code)) = ret_val {
@@ -947,7 +990,8 @@ impl Executor {
         None
     }
 
-    pub fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
+    #[async_recursion::async_recursion]
+    pub async fn execute_node_with_input(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
         self.recursion_depth += 1;
         if self.recursion_depth > 1000 {
             self.recursion_depth -= 1;
@@ -960,15 +1004,16 @@ impl Executor {
             return Err(IshError::ExecutionError(format!("Out of memory: exceeded limit of {} MB", limit_mb)));
         }
 
-        let res = self.execute_node_with_input_inner(node, input, out_file, jobs);
+        let res = self.execute_node_with_input_inner(node, input, out_file, jobs).await;
         self.recursion_depth -= 1;
         res
     }
 
-    fn execute_node_with_input_inner(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
+    #[async_recursion::async_recursion]
+    async fn execute_node_with_input_inner(&mut self, node: &AstNode, input: &str, out_file: Option<&str>, jobs: &mut JobController) -> Result<bool, IshError> {
         match &node.kind {
             AstNodeKind::CharLiteral(_) => {
-                let val = self.evaluate_node(node, jobs)?;
+                let val = self.evaluate_node(node, jobs).await?;
                 let output = val.to_string();
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -980,7 +1025,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::InterpolatedString(_) | AstNodeKind::BinaryOp { .. } | AstNodeKind::UnaryOp { .. } | AstNodeKind::TernaryOp { .. } => {
-                let val = self.evaluate_node(node, jobs)?;
+                let val = self.evaluate_node(node, jobs).await?;
                 let success = match val {
                     IshValue::Bool(b) => b,
                     _ => true,
@@ -997,7 +1042,7 @@ impl Executor {
                         }
                         let mut arr = Vec::new();
                         for item in items {
-                            arr.push(self.evaluate_node(item, jobs)?);
+                            arr.push(self.evaluate_node(item, jobs).await?);
                         }
                         let arr_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(arr));
                         IshValue::Reference(arr_ref)
@@ -1008,16 +1053,16 @@ impl Executor {
                         }
                         let mut m = HashMap::new();
                         for (k, v) in items {
-                            m.insert(k.clone(), self.evaluate_node(v, jobs)?);
+                            m.insert(k.clone(), self.evaluate_node(v, jobs).await?);
                         }
                         let map_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Map(m));
                         IshValue::Reference(map_ref)
                     }
-                    _ => self.evaluate_node(value, jobs)?,
+                    _ => self.evaluate_node(value, jobs).await?,
                 };
                 
                 if let Some(idx_node) = index {
-                    let idx_val = self.evaluate_node(idx_node, jobs)?;
+                    let idx_val = self.evaluate_node(idx_node, jobs).await?;
                     let mut found = false;
                     for scope in self.variables.iter().rev() {
                         if let Some(existing) = scope.get(variable) {
@@ -1184,15 +1229,15 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::Switch { expression, cases, default_case } => {
-                let expr_val = self.evaluate_node(expression, jobs)?;
+                let expr_val = self.evaluate_node(expression, jobs).await?;
                 let mut matched = false;
                 for (case_expr, body) in cases {
-                    let case_val = self.evaluate_node(case_expr, jobs)?;
+                    let case_val = self.evaluate_node(case_expr, jobs).await?;
                     if expr_val == case_val {
                         matched = true;
                         self.variables.push(std::collections::HashMap::new());
                         for stmt in body {
-                            self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                             if self.returning || self.breaking || self.continuing { break; }
                         }
                         self.variables.pop();
@@ -1203,7 +1248,7 @@ impl Executor {
                     if let Some(body) = default_case {
                         self.variables.push(std::collections::HashMap::new());
                         for stmt in body {
-                            self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                             if self.returning || self.breaking || self.continuing { break; }
                         }
                         self.variables.pop();
@@ -1213,7 +1258,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::If { condition, body, else_body } => {
-                let success = match self.evaluate_node(condition, jobs)? {
+                let success = match self.evaluate_node(condition, jobs).await? {
                     IshValue::Bool(b) => b,
                     IshValue::Int(i) => i != 0,
                     IshValue::Float(f) => f != 0.0,
@@ -1225,22 +1270,22 @@ impl Executor {
                 if success {
                     self.variables.push(HashMap::new());
                     for stmt in body {
-                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                 } else if let Some(else_stmts) = else_body {
                     self.variables.push(HashMap::new());
                     for stmt in else_stmts {
-                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                 }
                 return Ok(block_success)
             }
             AstNodeKind::For { variable, iterable, body } => {
-                let iterable_val = self.evaluate_node(iterable, jobs)?;
+                let iterable_val = self.evaluate_node(iterable, jobs).await?;
                 let items: Vec<IshValue> = match iterable_val {
                     IshValue::Reference(id) => {
                         if let Some(crate::core::gobbler::HeapObject::Array(arr)) = self.gobbler.get(id) {
@@ -1283,10 +1328,10 @@ impl Executor {
                         scope.insert(variable.clone(), item);
                     }
                     for stmt in body {
-                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -1302,7 +1347,7 @@ impl Executor {
             }
             AstNodeKind::While { condition, body } => {
                 let mut block_success = true;
-                while match self.evaluate_node(condition, jobs)? {
+                while match self.evaluate_node(condition, jobs).await? {
                     IshValue::Bool(b) => b,
                     IshValue::Int(i) => i != 0,
                     IshValue::Float(f) => f != 0.0,
@@ -1313,10 +1358,10 @@ impl Executor {
                     if self.returning || self.breaking { break; }
                     self.variables.push(HashMap::new());
                     for stmt in body {
-                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                        block_success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                         if self.returning || self.breaking || self.continuing { break; }
                     }
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                     if self.continuing {
                         self.continuing = false;
                     }
@@ -1329,7 +1374,7 @@ impl Executor {
                 let mut success = true;
                 self.variables.push(HashMap::new());
                 for stmt in try_body {
-                    match self.execute_node_with_input(stmt, "", out_file, jobs) {
+                    match self.execute_node_with_input(stmt, "", out_file, jobs).await {
                         Ok(s) => {
                             if !s {
                                 success = false;
@@ -1337,7 +1382,7 @@ impl Executor {
                             }
                         }
                         Err(e) => {
-                            let _ = self.pop_scope(jobs); // pop try block scope
+                            let _ = self.pop_scope(jobs).await; // pop try block scope
                             
                             self.variables.push(HashMap::new()); // push catch block scope
                             if let Some(scope) = self.variables.last_mut() {
@@ -1345,19 +1390,19 @@ impl Executor {
                             }
                             let mut catch_success = true;
                             for c_stmt in catch_body {
-                                match self.execute_node_with_input(c_stmt, "", out_file, jobs) {
+                                match self.execute_node_with_input(c_stmt, "", out_file, jobs).await {
                                     Ok(s) => if !s { catch_success = false; },
                                     Err(_) => { catch_success = false; break; },
                                 }
                             }
-                            let _ = self.pop_scope(jobs); // pop catch block scope
+                            let _ = self.pop_scope(jobs).await; // pop catch block scope
                             self.last_exit_code = if catch_success { 0 } else { 1 };
                             return Ok(catch_success);
                         }
                     }
                     if self.returning || self.breaking || self.continuing { break; }
                 }
-                let _ = self.pop_scope(jobs);
+                let _ = self.pop_scope(jobs).await;
                 self.last_exit_code = if success { 0 } else { 1 };
                 return Ok(success)
             }
@@ -1371,7 +1416,7 @@ impl Executor {
             }
             AstNodeKind::FieldDecl { name, default_value, .. } => {
                 let val = if let Some(def) = default_value {
-                    self.evaluate_node(def, jobs)?
+                    self.evaluate_node(def, jobs).await?
                 } else {
                     IshValue::Null
                 };
@@ -1388,7 +1433,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::Variable(var_name) => {
-                let val = self.evaluate_node(node, jobs)?;
+                let val = self.evaluate_node(node, jobs).await?;
                 let output = val.to_string();
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -1400,7 +1445,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::PropertyAccess { .. } | AstNodeKind::IndexAccess { .. } => {
-                let val = self.evaluate_node(node, jobs)?;
+                let val = self.evaluate_node(node, jobs).await?;
                 let output = val.to_string();
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
@@ -1413,7 +1458,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::StringLiteral(s) => {
-                let resolved = self.resolve_var(s, jobs)?;
+                let resolved = self.resolve_var(s, jobs).await?;
                 if let Some(path) = out_file {
                     let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
                     let _ = file.write_all(resolved.as_bytes());
@@ -1424,7 +1469,7 @@ impl Executor {
                 return Ok(true)
             }
             AstNodeKind::Return(inner) => {
-                let val = self.evaluate_node(inner, jobs)?;
+                let val = self.evaluate_node(inner, jobs).await?;
                 self.return_value = Some(val);
                 self.returning = true;
                 return Ok(true)
@@ -1432,7 +1477,7 @@ impl Executor {
 
             AstNodeKind::NamespaceDecl { body, .. } => {
                 for stmt in body {
-                    self.execute_node_with_input(stmt, input, out_file, jobs)?;
+                    self.execute_node_with_input(stmt, input, out_file, jobs).await?;
                     if self.returning || self.breaking || self.continuing { break; }
                 }
                 return Ok(true)
@@ -1464,7 +1509,7 @@ impl Executor {
                             if let AstNodeKind::KeyValuePair { .. } = &node.kind {
                                 return Err(IshError::ExecutionError("List initializer cannot contain key-value pairs".to_string()));
                             }
-                            list_elements.push(self.evaluate_node(node, jobs)?);
+                            list_elements.push(self.evaluate_node(node, jobs).await?);
                         }
                     }
                     if list_elements.len() > self.config.interpreter.list_size_limit {
@@ -1480,8 +1525,8 @@ impl Executor {
                     if let Some(init) = initializer {
                         for node in init {
                             if let AstNodeKind::KeyValuePair { key, value } = &node.kind {
-                                let key_val = self.evaluate_node(key, jobs)?;
-                                let val_val = self.evaluate_node(value, jobs)?;
+                                let key_val = self.evaluate_node(key, jobs).await?;
+                                let val_val = self.evaluate_node(value, jobs).await?;
                                 let key_str = match key_val {
                                     IshValue::String(s) => s,
                                     _ => key_val.to_string(),
@@ -1535,7 +1580,7 @@ impl Executor {
                 for (fname, fdef) in fields {
                     if !fdef.is_static { // Only initialize instance fields
                         let val = if let Some(default_node) = &fdef.default_value {
-                            self.evaluate_node(default_node, jobs)?
+                            self.evaluate_node(default_node, jobs).await?
                         } else {
                             IshValue::Null
                         };
@@ -1545,7 +1590,7 @@ impl Executor {
 
                 let mut eval_args = Vec::new();
                 for arg_node in args {
-                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                    eval_args.push(self.evaluate_node(arg_node, jobs).await?);
                 }
 
                 let mut evaluated_params = Vec::new();
@@ -1566,7 +1611,7 @@ impl Executor {
                                 arg_idx += 1;
                             } else {
                                 if let Some(default_expr) = &param.default_value {
-                                    let val = self.evaluate_node(default_expr, jobs)?;
+                                    let val = self.evaluate_node(default_expr, jobs).await?;
                                     evaluated_params.push((param.name.clone(), val));
                                 } else {
                                     evaluated_params.push((param.name.clone(), IshValue::Null));
@@ -1596,7 +1641,7 @@ impl Executor {
                     let prev_class = self.current_class.clone();
                     self.current_class = Some(qual_name.clone());
                     for stmt in constructor_body {
-                        self.execute_node_with_input(stmt, "", None, jobs)?;
+                        self.execute_node_with_input(stmt, "", None, jobs).await?;
                         if self.returning { break; }
                     }
                     let mut final_obj_ref = 0;
@@ -1609,7 +1654,7 @@ impl Executor {
 
                     self.returning = false;
                     self.function_bases.pop();
-                    let _ = self.pop_scope(jobs);
+                    let _ = self.pop_scope(jobs).await;
                     self.current_class = prev_class;
                     return Ok(true);
                 }
@@ -1626,7 +1671,7 @@ impl Executor {
                 let mut eval_args = Vec::new();
 
                 for arg_node in args {
-                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                    eval_args.push(self.evaluate_node(arg_node, jobs).await?);
                 }
 
                 let mut mutated = false;
@@ -1653,14 +1698,14 @@ impl Executor {
                     }
                 }
 
-                let mut obj_val = self.evaluate_node(object, jobs)?;
+                let mut obj_val = self.evaluate_node(object, jobs).await?;
                 
                 if let IshValue::String(ref s) = obj_val {
                     if s == "___implicit___" {
                         if method_name == "dotenv" {
                             let mut eval_args = Vec::new();
                             for arg_node in args {
-                                eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                                eval_args.push(self.evaluate_node(arg_node, jobs).await?);
                             }
                             if eval_args.is_empty() { return Err(IshError::ExecutionError("dotenv requires 1 argument".into())); }
                             let var_name = eval_args[0].to_string();
@@ -1690,7 +1735,7 @@ impl Executor {
                 
                 let mut eval_args = Vec::new();
                 for arg_node in args {
-                    eval_args.push(self.evaluate_node(arg_node, jobs)?);
+                    eval_args.push(self.evaluate_node(arg_node, jobs).await?);
                 }
 
                 if let IshValue::Reference(id) = obj_val {
@@ -1754,7 +1799,7 @@ impl Executor {
                                     arg_idx += 1;
                                 } else {
                                     if let Some(default_expr) = &param.default_value {
-                                        let val = self.evaluate_node(default_expr, jobs)?;
+                                        let val = self.evaluate_node(default_expr, jobs).await?;
                                         evaluated_params.push((param.name.clone(), val));
                                     } else {
                                         evaluated_params.push((param.name.clone(), IshValue::Null));
@@ -1777,7 +1822,7 @@ impl Executor {
                         let mut success = true;
                         let mut ret_val: Option<IshValue> = None;
                         for stmt in &method_clone.body {
-                            success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                            success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                             if self.returning { break; }
                         }
 
@@ -1785,7 +1830,7 @@ impl Executor {
                         
                         self.returning = false;
                         self.function_bases.pop();
-                        let _ = self.pop_scope(jobs);
+                        let _ = self.pop_scope(jobs).await;
                         self.current_class = prev_class;
 
                         if let Some(val) = ret_val {
@@ -1814,7 +1859,142 @@ impl Executor {
                             }
                         }
 
-                        // B. STATIC STRING METHODS
+                        // B. TASK METHODS
+                        if s == "Task" {
+                            match method_name.as_str() {
+                                "Run" => {
+                                    if let Some(func_arg) = eval_args.get(0) {
+                                        let func_name = func_arg.to_string();
+                                        if let Some((params, body)) = self.resolve_callable(&func_name) {
+                                            let mut child_exec = self.clone_for_isolate();
+                                            let eval_args_clone = eval_args[1..].to_vec();
+                                            
+                                            let mut scope = HashMap::new();
+                                            for (i, param) in params.iter().enumerate() {
+                                                if i < eval_args_clone.len() {
+                                                    scope.insert(param.name.clone(), eval_args_clone[i].clone());
+                                                }
+                                            }
+                                            child_exec.variables.push(scope);
+                                            
+                                            let handle = tokio::spawn(async move {
+                                                let mut child_jobs = crate::managers::job_controller::JobController::new();
+                                                let mut ret_val = IshValue::Null;
+                                                for stmt in &body {
+                                                    if let Err(e) = child_exec.execute_node_with_input(stmt, "", None, &mut child_jobs).await {
+                                                        return Err(e);
+                                                    }
+                                                    if child_exec.returning {
+                                                        ret_val = child_exec.return_value.take().unwrap_or(IshValue::Null);
+                                                        break;
+                                                    }
+                                                }
+                                                Ok(ret_val)
+                                            });
+                                            let id = self.next_task_id;
+                                            self.next_task_id += 1;
+                                            self.tasks.insert(id, handle);
+                                            self.return_value = Some(IshValue::Task(id));
+                                            return Ok(true);
+                                        } else {
+                                            return Err(IshError::ExecutionError(format!("Task.Run target function '{}' not found.", func_name)));
+                                        }
+                                    }
+                                }
+                                "Delay" => {
+                                    if let Some(IshValue::Int(ms)) = eval_args.get(0) {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(*ms as u64)).await;
+                                        self.return_value = Some(IshValue::Null);
+                                        return Ok(true);
+                                    } else {
+                                        return Err(IshError::ExecutionError("Task.Delay expects integer ms".to_string()));
+                                    }
+                                }
+                                _ => return Err(IshError::ExecutionError(format!("Task has no method '{}'", method_name)))
+                            }
+                        }
+
+                        // C. THREAD METHODS
+                        if s == "Thread" {
+                            match method_name.as_str() {
+                                "Start" => {
+                                    if let Some(func_arg) = eval_args.get(0) {
+                                        let func_name = func_arg.to_string();
+                                        if let Some((params, body)) = self.resolve_callable(&func_name) {
+                                            let mut child_exec = self.clone_for_isolate();
+                                            let eval_args_clone = eval_args[1..].to_vec();
+                                            
+                                            let mut scope = HashMap::new();
+                                            for (i, param) in params.iter().enumerate() {
+                                                if i < eval_args_clone.len() {
+                                                    scope.insert(param.name.clone(), eval_args_clone[i].clone());
+                                                }
+                                            }
+                                            child_exec.variables.push(scope);
+                                            
+                                            let handle = std::thread::spawn(move || {
+                                                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                                                rt.block_on(async {
+                                                    let mut child_jobs = crate::managers::job_controller::JobController::new();
+                                                    let mut ret_val = IshValue::Null;
+                                                    for stmt in &body {
+                                                        if let Err(e) = child_exec.execute_node_with_input(stmt, "", None, &mut child_jobs).await {
+                                                            return Err(e);
+                                                        }
+                                                        if child_exec.returning {
+                                                            ret_val = child_exec.return_value.take().unwrap_or(IshValue::Null);
+                                                            break;
+                                                        }
+                                                    }
+                                                    Ok(ret_val)
+                                                })
+                                            });
+                                            let id = self.next_thread_id;
+                                            self.next_thread_id += 1;
+                                            self.threads.insert(id, handle);
+                                            self.return_value = Some(IshValue::Thread(id));
+                                            return Ok(true);
+                                        } else {
+                                            return Err(IshError::ExecutionError(format!("Thread.Start target function '{}' not found.", func_name)));
+                                        }
+                                    }
+                                }
+                                "Join" => {
+                                    if let Some(IshValue::Thread(id)) = eval_args.get(0) {
+                                        if let Some(handle) = self.threads.remove(id) {
+                                            match handle.join() {
+                                                Ok(res) => {
+                                                    self.return_value = Some(res?);
+                                                    return Ok(true);
+                                                }
+                                                Err(_) => return Err(IshError::ExecutionError("Thread panicked".to_string())),
+                                            }
+                                        } else {
+                                            return Err(IshError::ExecutionError("Invalid Thread ID".to_string()));
+                                        }
+                                    } else {
+                                        return Err(IshError::ExecutionError("Thread.Join expects a Thread object".to_string()));
+                                    }
+                                }
+                                "Sleep" => {
+                                    if let Some(IshValue::Int(ms)) = eval_args.get(0) {
+                                        std::thread::sleep(std::time::Duration::from_millis(*ms as u64));
+                                        self.return_value = Some(IshValue::Null);
+                                        return Ok(true);
+                                    } else {
+                                        return Err(IshError::ExecutionError("Thread.Sleep expects integer ms".to_string()));
+                                    }
+                                }
+                                "CurrentThreadId" => {
+                                    let id = format!("{:?}", std::thread::current().id());
+                                    self.return_value = Some(IshValue::String(id));
+                                    return Ok(true);
+                                }
+                                _ => return Err(IshError::ExecutionError(format!("Thread has no method '{}'", method_name)))
+                            }
+                        }
+
+                        // D. STATIC STRING METHODS
                         if s == "string" {
                             match method_name.as_str() {
                                 "IsNullOrWhiteSpace" => {
@@ -1975,7 +2155,7 @@ impl Executor {
                                                 arg_idx += 1;
                                             } else {
                                                 if let Some(default_expr) = &param.default_value {
-                                                    let val = self.evaluate_node(default_expr, jobs)?;
+                                                    let val = self.evaluate_node(default_expr, jobs).await?;
                                                     evaluated_params.push((param.name.clone(), val));
                                                 } else {
                                                     evaluated_params.push((param.name.clone(), IshValue::Null));
@@ -1997,14 +2177,14 @@ impl Executor {
                                     let mut success = true;
                                     let mut ret_val: Option<IshValue> = None;
                                     for stmt in &method_clone.body {
-                                        success = self.execute_node_with_input(stmt, "", out_file, jobs)?;
+                                        success = self.execute_node_with_input(stmt, "", out_file, jobs).await?;
                                         if self.returning { break; }
                                     }
 
                                     let ret_val = self.return_value.take();
                                     self.returning = false;
                                     self.function_bases.pop();
-                                    let _ = self.pop_scope(jobs);
+                                    let _ = self.pop_scope(jobs).await;
 
                                     self.current_class = prev_class;
 
@@ -2063,6 +2243,7 @@ impl Executor {
 
             AstNodeKind::EnumDecl { .. } => return Ok(true),
             AstNodeKind::WithImport { .. } => return Ok(true),
+            AstNodeKind::Await(_) => return Ok(true),
             AstNodeKind::KeyValuePair { .. } => return Err(IshError::ExecutionError("KeyValuePair cannot be executed directly".to_string())),
         }
     }

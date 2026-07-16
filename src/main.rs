@@ -42,22 +42,23 @@ enum Commands {
     },
 }
 
-fn execute_headless_command(content: &str, executor: &mut core::executor::Executor, enforce_entry_point: bool, jobs: &mut managers::job_controller::JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<(), error::IshError> {
+async fn execute_headless_command(content: &str, executor: &mut core::executor::Executor, enforce_entry_point: bool, jobs: &mut managers::job_controller::JobController, expected_namespace: Option<String>, is_entry_file: bool) -> Result<(), error::IshError> {
     let mut lexer = core::tokenizer::Tokenizer::new(content);
     let tokens = lexer.tokenize()?;
     let mut parser = core::parser::Parser::new(tokens);
     let ast = parser.parse()?;
-    executor.execute(&ast, enforce_entry_point, jobs, expected_namespace, is_entry_file)?;
+    executor.execute(&ast, enforce_entry_point, jobs, expected_namespace, is_entry_file).await?;
     Ok(())
 }
 
-fn load_all_ish_files(dir: &std::path::Path, project_root: &std::path::Path, primary_namespace: &str, entry_file_path: &std::path::Path, executor: &mut core::executor::Executor, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
+#[async_recursion::async_recursion]
+async fn load_all_ish_files(dir: &std::path::Path, project_root: &std::path::Path, primary_namespace: &str, entry_file_path: &std::path::Path, executor: &mut core::executor::Executor, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
     if dir.is_dir() {
         for entry in std::fs::read_dir(dir).map_err(|e| error::IshError::ExecutionError(e.to_string()))? {
             let entry = entry.map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
             let path = entry.path();
             if path.is_dir() {
-                load_all_ish_files(&path, project_root, primary_namespace, entry_file_path, executor, jobs)?;
+                load_all_ish_files(&path, project_root, primary_namespace, entry_file_path, executor, jobs).await?;
             } else if path.extension().map_or(false, |ext| ext == "ish") {
                 let content = std::fs::read_to_string(&path).map_err(|e| error::IshError::ExecutionError(e.to_string()))?;
                 
@@ -79,7 +80,7 @@ fn load_all_ish_files(dir: &std::path::Path, project_root: &std::path::Path, pri
                     None
                 };
 
-                let _ = execute_headless_command(&content, executor, false, jobs, expected_ns, is_entry); // Ignore failures in included files for now, or just let them register classes
+                let _ = execute_headless_command(&content, executor, false, jobs, expected_ns, is_entry).await; // Ignore failures in included files for now, or just let them register classes
             }
         }
     }
@@ -110,7 +111,8 @@ fn load_config_or_default() -> core::config::IshConfig {
     config
 }
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     #[cfg(windows)]
     let _ = enable_virtual_terminal_processing();
     
@@ -169,7 +171,7 @@ Map-Size-Limit: 5000;
                 let clean_inc = inc.replace("**", "").replace("*", "");
                 let inc_path = current_dir.join(clean_inc.trim_end_matches('/'));
                 if inc_path.exists() {
-                    if let Err(e) = load_all_ish_files(&inc_path, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs) {
+                    if let Err(e) = load_all_ish_files(&inc_path, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs).await {
                         eprintln!("Failed to load include path {}: {}", inc, e);
                         return ExitCode::FAILURE;
                     }
@@ -178,7 +180,7 @@ Map-Size-Limit: 5000;
             }
             
             if !included_any {
-                if let Err(e) = load_all_ish_files(&current_dir, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs) {
+                if let Err(e) = load_all_ish_files(&current_dir, &current_dir, primary_namespace, &entry_path, &mut executor, &mut jobs).await {
                      eprintln!("Failed to load project files: {}", e);
                      return ExitCode::FAILURE;
                 }
@@ -189,7 +191,7 @@ Map-Size-Limit: 5000;
                     Ok(content) => {
                         let is_entry = std::path::Path::new(&script).canonicalize().unwrap_or_default() == entry_path.canonicalize().unwrap_or_default();
                         let expected_ns = Some(primary_namespace.to_string());
-                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry) {
+                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry).await {
                             eprintln!("Script execution failed: {}", e);
                             return ExitCode::FAILURE;
                         }
@@ -204,7 +206,7 @@ Map-Size-Limit: 5000;
                 if entry_path.exists() {
                     let content = std::fs::read_to_string(&entry_path).unwrap_or_default();
                     let expected_ns = Some(primary_namespace.to_string());
-                    if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, true) {
+                    if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, true).await {
                         eprintln!("Entry-File execution failed: {}", e);
                         return ExitCode::FAILURE;
                     }
@@ -238,7 +240,7 @@ Map-Size-Limit: 5000;
                         let entry_path = current_dir.join(&config.project.entry_file);
                         let is_entry = std::path::Path::new(&script).canonicalize().unwrap_or_default() == entry_path.canonicalize().unwrap_or_default();
                         let expected_ns = Some(primary_namespace);
-                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry) {
+                        if let Err(e) = execute_headless_command(&content, &mut executor, true, &mut jobs, expected_ns, is_entry).await {
                             eprintln!("Script execution failed: {}", e);
                             return ExitCode::FAILURE;
                         }

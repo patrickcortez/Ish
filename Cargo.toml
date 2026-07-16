@@ -14,6 +14,9 @@ comfy-table = "7.2.2"
 dotenvy = "0.15"
 quote = "1.0.46"
 proc-macro2 = "1.0.106"
+tokio = { version = "1.52.4", features = ["full"] }
+futures = "0.3.32"
+async-recursion = "1.1.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
