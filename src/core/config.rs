@@ -5,6 +5,9 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
     pub name: String,
+    pub version: String,
+    pub author: String,
+    pub readme: Option<String>,
     pub entry_file: String,
     pub entry_class: String,
     pub entry_method: String,
@@ -35,6 +38,9 @@ impl Default for IshConfig {
         Self {
             project: ProjectConfig {
                 name: "Ish-Project".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Unknown".to_string(),
+                readme: None,
                 entry_file: "Main.ish".to_string(),
                 entry_class: "Program".to_string(),
                 entry_method: "Main".to_string(),
@@ -121,6 +127,9 @@ pub fn parse_config_str(content: &str) -> Result<IshConfig, IshError> {
                 "Project" => {
                     match key.as_str() {
                         "Name" => config.project.name = parsed_str.to_string(),
+                        "Version" => config.project.version = parsed_str.to_string(),
+                        "Author" => config.project.author = parsed_str.to_string(),
+                        "Readme" => config.project.readme = Some(parsed_str.to_string()),
                         "Entry-File" => config.project.entry_file = parsed_str.to_string(),
                         "Entry-Class" => config.project.entry_class = parsed_str.to_string(),
                         "Entry-Method" => config.project.entry_method = parsed_str.to_string(),

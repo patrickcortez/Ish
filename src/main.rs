@@ -35,6 +35,11 @@ enum Commands {
     },
     /// Print version information
     Version,
+    /// Display information about an Ish project
+    Info {
+        /// Path to the project directory
+        path: String,
+    },
 }
 
 fn execute_headless_command(content: &str, executor: &mut core::executor::Executor, enforce_entry_point: bool, jobs: &mut managers::job_controller::JobController) -> Result<(), error::IshError> {
@@ -103,6 +108,7 @@ fn main() -> ExitCode {
 Name: \"MyProject\";
 Version: \"1.0.0\";
 Author: \"Unknown\";
+Readme: \"\";
 Entry-File: \"Main.ish\";
 Entry-Class: \"Program\";
 Entry-Method: \"Main\";
@@ -221,6 +227,52 @@ Map-Size-Limit: 5000;
         }
         Commands::Version => {
             println!("Ish version {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Commands::Info { path } => {
+            let target_dir = std::path::Path::new(&path);
+            if !target_dir.exists() || !target_dir.is_dir() {
+                eprintln!("Error: Path '{}' does not exist or is not a directory.", path);
+                return ExitCode::FAILURE;
+            }
+            
+            let mut found_config = false;
+            let mut info_config = core::config::IshConfig::default();
+            
+            if let Ok(entries) = std::fs::read_dir(target_dir) {
+                for entry in entries.flatten() {
+                    if let Some(ext) = entry.path().extension() {
+                        if ext == "ic" {
+                            if let Ok(config) = core::config::parse_config_file(entry.path()) {
+                                info_config = config;
+                                found_config = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if !found_config {
+                eprintln!("Error: No .ic configuration file found in '{}'.", path);
+                return ExitCode::FAILURE;
+            }
+            
+            println!("Name: \"{}\";", info_config.project.name);
+            println!("Version: \"{}\";", info_config.project.version);
+            println!("Author: \"{}\";", info_config.project.author);
+            
+            if let Some(readme_path) = &info_config.project.readme {
+                if !readme_path.is_empty() {
+                    let full_readme_path = target_dir.join(readme_path);
+                    if full_readme_path.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&full_readme_path) {
+                            println!("{}", content);
+                        }
+                    }
+                }
+            }
+            
             ExitCode::SUCCESS
         }
     }
