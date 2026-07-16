@@ -1,18 +1,22 @@
 use ish::core::ast::IshValue;
-use ish::core::gobbler::{Gobbler, HeapObject};
-use ish::core::stdlib::{StdlibProvider, IshCommandLine};
+use ish::core::executor::Executor;
+use ish::error::IshError;
+use std::collections::HashMap;
 
-pub struct Program {}
-impl Program {
-    #[allow(non_snake_case)]
-    pub fn Main(_args: Vec<IshValue>, gobbler: &mut Gobbler) -> Option<IshValue> {
-        IshCommandLine.execute_method("OutputLine", &[IshValue::String("Hello from AOT compiled Ish!".to_string())], gobbler).unwrap();
-        None
-    }
+#[allow(non_snake_case)]
+pub fn Program_Main(args: Vec<IshValue>, executor: &mut Executor) -> Result<Option<IshValue>, IshError> {
+    executor.variables.push(HashMap::new());
+    println!("{}", executor.value_to_string(&IshValue::String("Hello from AOT compiled Ish!".to_string())));
+    executor.variables.pop();
+    Ok(None)
 }
 
-fn main() {
-    let mut gobbler = Gobbler::new();
-    let args = vec![];
-    Program::Main(args, &mut gobbler);
+fn main() -> Result<(), IshError> {
+    let args = std::env::args().collect::<Vec<_>>();
+    let config = ish::core::config::IshConfig::default();
+    let mut executor = Executor::new(args.clone(), config);
+    // Initialize scope
+    executor.variables.push(HashMap::new());
+    Program_Main(args.into_iter().map(|s| IshValue::String(s)).collect(), &mut executor)?;
+    Ok(())
 }
