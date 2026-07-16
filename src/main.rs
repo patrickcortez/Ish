@@ -4,6 +4,7 @@ use std::process::ExitCode;
 pub mod error;
 pub mod core;
 pub mod managers;
+pub mod compiler;
 
 #[cfg(windows)]
 use core::io::platform::enable_virtual_terminal_processing;
@@ -35,8 +36,12 @@ enum Commands {
     },
     /// Print version information
     Version,
-    /// Display information about an Ish project
     Info {
+        /// Path to the project directory
+        path: String,
+    },
+    /// Ahead-Of-Time compile an Ish project
+    Build {
         /// Path to the project directory
         path: String,
     },
@@ -271,6 +276,65 @@ Map-Size-Limit: 5000;
                         }
                     }
                 }
+            }
+            
+            ExitCode::SUCCESS
+        }
+        Commands::Build { path } => {
+            let target_dir = std::path::Path::new(&path);
+            if !target_dir.exists() || !target_dir.is_dir() {
+                eprintln!("Error: Path '{}' does not exist or is not a directory.", path);
+                return ExitCode::FAILURE;
+            }
+            
+            let mut found_config = false;
+            let mut build_config = core::config::IshConfig::default();
+            
+            if let Ok(entries) = std::fs::read_dir(target_dir) {
+                for entry in entries.flatten() {
+                    if let Some(ext) = entry.path().extension() {
+                        if ext == "ic" {
+                            if let Ok(config) = core::config::parse_config_file(entry.path()) {
+                                build_config = config;
+                                found_config = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if !found_config {
+                eprintln!("Error: No .ic configuration file found in '{}'.", path);
+                return ExitCode::FAILURE;
+            }
+            
+            let entry_path = target_dir.join(&build_config.project.entry_file);
+            if !entry_path.exists() {
+                eprintln!("Entry-File '{}' not found in project", build_config.project.entry_file);
+                return ExitCode::FAILURE;
+            }
+            
+            let content = std::fs::read_to_string(&entry_path).unwrap_or_default();
+            let mut lexer = core::tokenizer::Tokenizer::new(&content);
+            let tokens = match lexer.tokenize() {
+                Ok(t) => t,
+                Err(e) => { eprintln!("Lexer error: {}", e); return ExitCode::FAILURE; }
+            };
+            let mut parser = core::parser::Parser::new(tokens);
+            let ast = match parser.parse() {
+                Ok(a) => a,
+                Err(e) => { eprintln!("Parse error: {}", e); return ExitCode::FAILURE; }
+            };
+            
+            println!("Transpiling {}...", build_config.project.name);
+            let rust_code = compiler::codegen::generate_rust_code(&ast);
+            
+            println!("Compiling via bundled toolchain...");
+            let ish_core_path = std::env::current_dir().unwrap_or_default();
+            if let Err(e) = compiler::driver::build_project(&rust_code, target_dir, &ish_core_path) {
+                eprintln!("Build failed: {}", e);
+                return ExitCode::FAILURE;
             }
             
             ExitCode::SUCCESS

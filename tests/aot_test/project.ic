@@ -1,0 +1,5 @@
+[Project]
+Name: "AOT_Test";
+Version: "1.0.0";
+Author: "Tester";
+Entry-File: "Main.ish";
