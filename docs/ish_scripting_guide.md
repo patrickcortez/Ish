@@ -71,6 +71,14 @@ Ish follows a block-scoped lifetime architecture:
 
 Ish is fully Turing-complete with first-class data structure support!
 
+### The Pair Type
+The `Pair` struct is a fundamental type used to store a key-value mapping. It exposes two properties: `Key` and `Value`.
+```csharp
+let p = new Pair("Age", 30);
+CommandLine.OutputLine(p.Key);   // Age
+CommandLine.OutputLine(p.Value); // 30
+```
+
 ### Arrays
 Arrays in Ish are strictly immutable. Initialize them natively using the `let[]` keyword and square brackets:
 ```csharp
@@ -80,15 +88,22 @@ CommandLine.OutputLine(my_arr[0]);
 Attempting to assign into an array index (`my_arr[0] = "x"`) raises a runtime error telling you to use a `List` instead — see [Generics & Advanced Types](#generics--advanced-types).
 
 ### Maps
-Initialize maps natively using the `Map` constructor.
+Initialize maps either natively or via the `new Map<K, V>()` syntax. Ish supports nested `{}` initializers (similar to C# dictionaries) to make population clean and easy.
 ```csharp
-let my_map = Map(
+let my_map = new Map<string, string>() {
     {"name": "Ish"},
     {"version": "1.0"}
-);
+};
 CommandLine.OutputLine(my_map["name"]);
 ```
 Unlike arrays, indexed assignment into a `Map` (`my_map["name"] = "New"`) is allowed and updates/inserts the entry in place.
+
+You can iterate through a map using a `for` loop, which will yield `Pair` objects:
+```csharp
+for kv in my_map {
+    CommandLine.OutputLine($"{kv.Key}: {kv.Value}");
+}
+```
 
 ---
 
@@ -348,12 +363,11 @@ let s = Status.Active; // 1
 Ish fully supports **Generics** allowing strongly-typed, reusable object instantiations like `List<T>`.
 
 ### The List Object
-Lists are mutable arrays. You can instantiate them using the `new` keyword and invoke built-in methods like `add`, `remove`, and `clear`. 
+Lists are mutable arrays. You can instantiate them using the `new` keyword and optionally provide inline initialization via a `{ ... }` block. You can also invoke built-in methods like `add`, `remove`, and `clear`. 
 
 ```csharp
-let my_list = new List<string>();
-my_list.add("apple");
-my_list.add("banana");
+let my_list = new List<string>() { "apple", "banana" };
+my_list.add("cherry");
 my_list.remove(0); // Removes "apple"
 my_list.clear();
 ```

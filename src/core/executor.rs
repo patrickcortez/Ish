@@ -371,7 +371,10 @@ impl Executor {
             AstNodeKind::CharLiteral(c) => Ok(IshValue::Char(*c)),
 
             AstNodeKind::Variable(var_name) => {
-
+                if var_name == "___implicit___" {
+                    return Ok(IshValue::String("___implicit___".to_string()));
+                }
+                
                 if self.registry.classes.contains_key(var_name) || 
                 self.registry.structs.contains_key(var_name) || 
                 self.registry.enums.contains_key(var_name) || 
@@ -1166,6 +1169,19 @@ impl Executor {
                             arr.clone()
                         } else if let Some(crate::core::gobbler::HeapObject::List(arr)) = self.gobbler.get(id) {
                             arr.clone()
+                        } else if let Some(crate::core::gobbler::HeapObject::Map(map)) = self.gobbler.get(id) {
+                            let mut pairs = Vec::new();
+                            for (k, v) in map.clone() {
+                                let mut properties = HashMap::new();
+                                properties.insert("Key".to_string(), IshValue::String(k));
+                                properties.insert("Value".to_string(), v);
+                                let pair_id = self.gobbler.allocate(crate::core::gobbler::HeapObject::Object {
+                                    class_name: "Pair".to_string(),
+                                    properties
+                                });
+                                pairs.push(IshValue::Reference(pair_id));
+                            }
+                            pairs
                         } else {
                             vec![IshValue::Reference(id)]
                         }
@@ -1173,6 +1189,14 @@ impl Executor {
                     IshValue::String(s) => s.chars().map(|c| IshValue::Char(c)).collect(),
                     _ => vec![iterable_val.clone()],
                 };
+                
+                // Protect items from being garbage collected during loop iterations
+                let temp_array_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Array(items.clone()));
+                let temp_var_name = format!("__temp_for_{}", temp_array_ref);
+                if let Some(scope) = self.variables.last_mut() {
+                    scope.insert(temp_var_name.clone(), IshValue::Reference(temp_array_ref));
+                }
+
                 let mut block_success = true;
                 for item in items {
                     if self.returning || self.breaking { break; }
@@ -1190,6 +1214,11 @@ impl Executor {
                     }
                     if self.breaking || self.returning { break; }
                 }
+                
+                if let Some(scope) = self.variables.last_mut() {
+                    scope.remove(&temp_var_name);
+                }
+
                 if self.breaking { self.breaking = false; }
                 return Ok(block_success)
             }
@@ -1343,7 +1372,7 @@ impl Executor {
                 return Ok(true)
             }
 
-            AstNodeKind::ObjectInstantiation { class_name, args } => {
+            AstNodeKind::ObjectInstantiation { class_name, args, initializer } => {
                 let base_class_name = if let Some(idx) = class_name.find('<') {
                     &class_name[..idx]
                 } else {
@@ -1351,9 +1380,44 @@ impl Executor {
                 };
 
                 if base_class_name == "List" {
-                    let list_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::List(Vec::new()));
+                    let mut list_elements = Vec::new();
+                    if let Some(init) = initializer {
+                        for node in init {
+                            if let AstNodeKind::KeyValuePair { .. } = &node.kind {
+                                return Err(IshError::ExecutionError("List initializer cannot contain key-value pairs".to_string()));
+                            }
+                            list_elements.push(self.evaluate_node(node, jobs)?);
+                        }
+                    }
+                    let list_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::List(list_elements));
                     self.return_value = Some(IshValue::Reference(list_ref));
                     return Ok(true);
+                }
+
+                if base_class_name == "Map" {
+                    let mut map_elements = HashMap::new();
+                    if let Some(init) = initializer {
+                        for node in init {
+                            if let AstNodeKind::KeyValuePair { key, value } = &node.kind {
+                                let key_val = self.evaluate_node(key, jobs)?;
+                                let val_val = self.evaluate_node(value, jobs)?;
+                                let key_str = match key_val {
+                                    IshValue::String(s) => s,
+                                    _ => key_val.to_string(),
+                                };
+                                map_elements.insert(key_str, val_val);
+                            } else {
+                                return Err(IshError::ExecutionError("Map initializer must contain key-value pairs".to_string()));
+                            }
+                        }
+                    }
+                    let map_ref = self.gobbler.allocate(crate::core::gobbler::HeapObject::Map(map_elements));
+                    self.return_value = Some(IshValue::Reference(map_ref));
+                    return Ok(true);
+                }
+
+                if initializer.is_some() {
+                    return Err(IshError::ExecutionError(format!("Initializer blocks are not supported for class/struct '{}'", class_name)));
                 }
                 
                 let class_def = self.registry.resolve_class(base_class_name).cloned();
@@ -1902,6 +1966,7 @@ impl Executor {
 
             AstNodeKind::EnumDecl { .. } => return Ok(true),
             AstNodeKind::WithImport { .. } => return Ok(true),
+            AstNodeKind::KeyValuePair { .. } => return Err(IshError::ExecutionError("KeyValuePair cannot be executed directly".to_string())),
         }
     }
 }

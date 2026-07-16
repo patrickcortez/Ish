@@ -1,0 +1,47 @@
+Concept:
+
+Title: Ish Configuration File
+
+Description:
+
+Instead of individually calling Scripts, people can just do `ish run` at the root of the ish project. 
+Ish will then find a Configuration file called "<project-name.ic>", Ish's config engine is a flat and simple
+config language:
+
+``` IC file
+
+[Project]
+Name: "My-project"; // Sets the project name.
+Entry-File:"Main.ish"; // Sets the entry file.
+Entry-Class:"Program"; // Sets the entry class.
+Entry-Method:"Main"; // Sets the entry method.
+With-Args: true; // true by default. If false Ish wont require the entry method for: params string[] args.
+
+Include: // Include directories Ish needs to read from. Note: Without this Ish will read every file in every directory.
+    - "Scripts/**"; // Must exist at the root of the projects directory
+    - "Lib/**"; // Must exist at the root of the projects directory
+
+Verbose: false; // Sets if Ish would output internal operations
+DotEnv: true; // enable/disable the reading of a DotEnv file, if true: .env file must be in project root. then use var in ish: `dotenv("VAR_NAME");` returns a string.
+
+[Configuration] // Interpreter Configurations
+Array-Size-Limit: 1024; // Sets the maximum size of an array.
+List-Size-Limit: 1024; // Sets the maximum size of a list.
+Map-Size-Limit: 1024; // Sets the maximum size of a map.
+String-Length-Limit: 1024; // Sets the maximum size of a string.
+Max-variables: 1024; // Sets the maximum amount of variables in a ish file.
+Max-Memory-Threshold: 128; // Sets the max amount of memory in MB. Ish will use. If reached it will stop executing and output an error.
+
+```
+
+After reading the through the entire settings, Ish will then apply these settings and go over to the entry file and method.
+
+New Commands:
+ - `ish run` - Runs the project.
+ - `ish run <args>` - Runs the project with arguments.
+ - `ish version` - Outputs the version of Ish.
+ - `ish debug` - Runs the project in debug mode.
+ - `ish debug <file>` - debugs a ish file.
+ - `ish help` - Outputs the help menu.
+ - `ish init` - Initializes a new ish project in the current directory.
+ 

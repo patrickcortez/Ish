@@ -1,0 +1,14 @@
+class Program {
+    public static func Main(params let[] args) {
+        var map = new Map<string, int>() {
+            "a": 100,
+            "b": 200
+        }
+
+        for kv in map {
+            var k = kv.Key
+            var v = kv.Value
+            Console.WriteLine("{0}: {1}", k, v)
+        }
+    }
+}

@@ -68,9 +68,72 @@ pub struct Registry {
 
 impl Registry {
     pub fn new() -> Self {
+        let mut structs = HashMap::new();
+        
+        let mut pair_fields = HashMap::new();
+        pair_fields.insert("Key".to_string(), FieldDef {
+            name: "Key".to_string(),
+            type_specifier: None,
+            access: AccessSpecifier::Public,
+            is_static: false,
+            default_value: None,
+        });
+        pair_fields.insert("Value".to_string(), FieldDef {
+            name: "Value".to_string(),
+            type_specifier: None,
+            access: AccessSpecifier::Public,
+            is_static: false,
+            default_value: None,
+        });
+        
+        let pair_constructor = (
+            AccessSpecifier::Public,
+            vec![
+                crate::core::ast::Param { name: "k".to_string(), type_specifier: None, is_array: false, is_variadic: false, default_value: None },
+                crate::core::ast::Param { name: "v".to_string(), type_specifier: None, is_array: false, is_variadic: false, default_value: None }
+            ],
+            vec![
+                AstNode::new(
+                    AstNodeKind::Assignment {
+                        type_specifier: None,
+                        variable: "this.Key".to_string(),
+                        index: None,
+                        value: Box::new(AstNode::new(
+                            AstNodeKind::Variable("k".to_string()),
+                            0, 0
+                        )),
+                        is_declaration: false,
+                    },
+                    0, 0
+                ),
+                AstNode::new(
+                    AstNodeKind::Assignment {
+                        type_specifier: None,
+                        variable: "this.Value".to_string(),
+                        index: None,
+                        value: Box::new(AstNode::new(
+                            AstNodeKind::Variable("v".to_string()),
+                            0, 0
+                        )),
+                        is_declaration: false,
+                    },
+                    0, 0
+                )
+            ]
+        );
+
+        structs.insert("Pair".to_string(), StructDef {
+            name: "Pair".to_string(),
+            qualified_name: "Pair".to_string(),
+            access: AccessSpecifier::Public,
+            fields: pair_fields,
+            constructor: Some(pair_constructor),
+            destructor: None,
+        });
+
         Self {
             classes: HashMap::new(),
-            structs: HashMap::new(),
+            structs,
             enums: HashMap::new(),
             namespace_stack: Vec::new(),
             loaded_files: HashSet::new(),

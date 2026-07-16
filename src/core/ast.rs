@@ -142,6 +142,12 @@ pub enum AstNodeKind {
     Array(Vec<AstNode>),
     
     Map(Vec<(String, AstNode)>),
+    
+    /// Key-Value pair for Map initialization (`key: value`)
+    KeyValuePair {
+        key: Box<AstNode>,
+        value: Box<AstNode>,
+    },
 
     /// OOP: Namespace Declaration
     NamespaceDecl {
@@ -195,6 +201,7 @@ pub enum AstNodeKind {
     ObjectInstantiation {
         class_name: String,
         args: Vec<AstNode>,
+        initializer: Option<Vec<AstNode>>,
     },
 
     /// OOP: Method Call (`$obj.method()`)

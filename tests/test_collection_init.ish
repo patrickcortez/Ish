@@ -1,0 +1,20 @@
+public static class Program {
+    public static func Main(params string[] args) {
+        var map = new Map<string, int>() {{"a": 100},{"b": 200}};
+
+        for kv in map {
+            var k = kv.Key;
+            var v = kv.Value;
+            CommandLine.OutputLine($"{k}: {v}");
+        }
+
+        var p = new Pair("TestKey", 999);
+        var pk = p.Key;
+        CommandLine.OutputLine($"pk: {pk}");
+
+        var list = new List<string>() {"hello", "world"};
+        for item in list {
+            CommandLine.OutputLine($"list item: {item}");
+        }
+    }
+}

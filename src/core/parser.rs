@@ -1111,12 +1111,58 @@ impl Parser {
                     }
                 }
                 
-                return Ok(AstNode::new(AstNodeKind::ObjectInstantiation { class_name, args }, line, col));
+                let mut initializer = None;
+                if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBrace)) {
+                    self.consume(); // {
+                    let mut elements = Vec::new();
+                    while let Some(tok) = self.peek() {
+                        if matches!(tok.kind, TokenKind::RBrace) {
+                            self.consume(); // }
+                            break;
+                        }
+                        if matches!(tok.kind, TokenKind::Comma) || matches!(tok.kind, TokenKind::Semicolon) {
+                            self.consume(); // , or \n
+                            continue;
+                        }
+                        let mut has_inner_brace = false;
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::LBrace)) {
+                            self.consume();
+                            has_inner_brace = true;
+                        }
+                        
+                        let expr = self.parse_expression()?;
+                        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Colon)) || (has_inner_brace && matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Comma))) {
+                            self.consume(); // : or ,
+                            let val_expr = self.parse_expression()?;
+                            elements.push(AstNode::new(AstNodeKind::KeyValuePair {
+                                key: Box::new(expr),
+                                value: Box::new(val_expr),
+                            }, line, col));
+                        } else {
+                            elements.push(expr);
+                        }
+                        
+                        if has_inner_brace {
+                            if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::RBrace)) {
+                                self.consume();
+                            } else {
+                                return Err(IshError::ParseError("Expected '}' to close nested initializer element".to_string()));
+                            }
+                        }
+                    }
+                    initializer = Some(elements);
+                }
+                
+                return Ok(AstNode::new(AstNodeKind::ObjectInstantiation { class_name, args, initializer }, line, col));
             }
             if matches!(tok.kind, TokenKind::LBracket) {
                 self.consume();
                 let mut items = Vec::new();
                 while self.position < self.tokens.len() && !matches!(self.tokens[self.position].kind, TokenKind::RBracket) {
+                    if matches!(self.tokens[self.position].kind, TokenKind::Semicolon) {
+                        self.consume();
+                        continue;
+                    }
                     items.push(self.parse_expression()?);
                     if self.position < self.tokens.len() && matches!(self.tokens[self.position].kind, TokenKind::Comma) {
                         self.consume();

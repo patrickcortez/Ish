@@ -350,9 +350,14 @@ impl Linter {
                 
                 self.current_class_fields = prev_fields;
             }
-            AstNodeKind::ObjectInstantiation { args, .. } => {
+            AstNodeKind::ObjectInstantiation { args, initializer, .. } => {
                 for arg in args {
                     self.check_node(arg)?;
+                }
+                if let Some(init) = initializer {
+                    for node in init {
+                        self.check_node(node)?;
+                    }
                 }
             }
             AstNodeKind::Switch { expression, cases, default_case } => {
@@ -373,6 +378,10 @@ impl Linter {
                 for node in nodes {
                     self.check_node(node)?;
                 }
+            }
+            AstNodeKind::KeyValuePair { key, value } => {
+                self.check_node(key)?;
+                self.check_node(value)?;
             }
             AstNodeKind::MethodCall { object, args, .. } => {
                 self.check_node(object)?;
